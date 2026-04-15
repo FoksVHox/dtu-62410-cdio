@@ -38,9 +38,23 @@ type EV3Configuration struct {
 	DefaultStopAction string `default:"brake" json:"default_stop_action" yaml:"default_stop_action"`
 }
 
+// MotorConfiguration defines how a single motor should be discovered and controlled.
+type MotorConfiguration struct {
+	Address    string `json:"address" yaml:"address"`
+	DriverName string `json:"driver_name" yaml:"driver_name"`
+	Inverted   bool   `json:"inverted" yaml:"inverted"`
+}
+
+// MotorsConfiguration defines left/right motor mappings for the belt drive.
+type MotorsConfiguration struct {
+	Left  MotorConfiguration `json:"left" yaml:"left"`
+	Right MotorConfiguration `json:"right" yaml:"right"`
+}
+
 // MindstormConfiguration defines defaults for the EV3 SDK package.
 type MindstormConfiguration struct {
-	EV3 EV3Configuration `json:"ev3" yaml:"ev3"`
+	EV3    EV3Configuration    `json:"ev3" yaml:"ev3"`
+	Motors MotorsConfiguration `json:"motors" yaml:"motors"`
 }
 
 type Configuration struct {

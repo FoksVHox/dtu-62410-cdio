@@ -1,3 +1,11 @@
 system:
   root_directory: .
   log_directory: ./logs
+mindstorm:
+  motors:
+    left:
+      address: motor0
+      inverted: false
+    right:
+      address: motor2
+      inverted: true
