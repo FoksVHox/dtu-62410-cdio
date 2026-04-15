@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/apex/log"
 )
 
 // MotorConfig describes how a motor should be discovered and controlled on EV3dev.
@@ -29,6 +31,13 @@ type Motor struct {
 
 // NewMotor discovers a motor in EV3dev by its address (for example "outA").
 func NewMotor(cfg MotorConfig) (*Motor, error) {
+	log.WithFields(log.Fields{
+		"address":     cfg.Address,
+		"driver_name": cfg.DriverName,
+		"base_path":   cfg.BasePath,
+		"inverted":    cfg.Inverted,
+	}).Debug("mindstorm: initializing motor")
+
 	if strings.TrimSpace(cfg.Address) == "" {
 		return nil, fmt.Errorf("mindstorm: motor address is required")
 	}
@@ -37,16 +46,19 @@ func NewMotor(cfg MotorConfig) (*Motor, error) {
 	if strings.TrimSpace(basePath) == "" {
 		basePath = config.Get().Mindstorm.EV3.MotorClassPath
 	}
+	log.WithField("base_path", basePath).Debug("mindstorm: using motor class path")
 
 	motorPath, err := findMotorPath(basePath, cfg.Address, cfg.DriverName)
 	if err != nil {
 		return nil, err
 	}
+	log.WithFields(log.Fields{"address": cfg.Address, "motor_path": motorPath}).Debug("mindstorm: discovered motor path")
 
 	maxSpeedTPS, err := readIntAttr(motorPath, "max_speed")
 	if err != nil {
 		return nil, fmt.Errorf("mindstorm: read max speed: %w", err)
 	}
+	log.WithFields(log.Fields{"address": cfg.Address, "max_speed_tps": maxSpeedTPS}).Debug("mindstorm: loaded motor capabilities")
 
 	return &Motor{
 		path:        motorPath,
@@ -126,6 +138,12 @@ func (m *Motor) writeAttr(name, value string) error {
 }
 
 func findMotorPath(basePath, address, driverName string) (string, error) {
+	log.WithFields(log.Fields{
+		"base_path":   basePath,
+		"address":     address,
+		"driver_name": driverName,
+	}).Debug("mindstorm: scanning motor class path")
+
 	entries, err := os.ReadDir(basePath)
 	if err != nil {
 		return "", fmt.Errorf("mindstorm: read motor class path %q: %w", basePath, err)
@@ -135,35 +153,47 @@ func findMotorPath(basePath, address, driverName string) (string, error) {
 	var discovered []string
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		// EV3 sysfs class entries are commonly symlinks (for example motor0 -> ../../devices/...).
+		// Skip only plain files and keep directories/symlinks as candidates.
+		entryType := entry.Type()
+		if !entry.IsDir() && entryType&os.ModeSymlink == 0 {
+			log.WithField("entry", entry.Name()).Debug("mindstorm: skipping non-motor class entry")
 			continue
 		}
 		motorPath := filepath.Join(basePath, entry.Name())
 
 		motorAddress, err := readStringAttr(motorPath, "address")
 		if err != nil {
+			log.WithFields(log.Fields{"entry": entry.Name(), "motor_path": motorPath, "error": err.Error()}).Debug("mindstorm: candidate missing address attribute")
 			continue
 		}
+
 		if name, nameErr := readStringAttr(motorPath, "driver_name"); nameErr == nil {
 			discovered = append(discovered, fmt.Sprintf("%s(address=%s,driver=%s)", entry.Name(), motorAddress, name))
 		} else {
 			discovered = append(discovered, fmt.Sprintf("%s(address=%s)", entry.Name(), motorAddress))
 		}
+		log.WithFields(log.Fields{"entry": entry.Name(), "motor_address": motorAddress}).Debug("mindstorm: discovered motor candidate")
 
 		discoveredAddress := normalizeAddress(motorAddress)
 		if discoveredAddress != targetAddress && entry.Name() != address {
+			log.WithFields(log.Fields{"entry": entry.Name(), "target": targetAddress, "candidate": discoveredAddress}).Debug("mindstorm: candidate does not match requested address")
 			continue
 		}
 
 		if driverName == "" {
+			log.WithFields(log.Fields{"entry": entry.Name(), "motor_path": motorPath}).Debug("mindstorm: matched motor by address")
 			return motorPath, nil
 		}
 
 		name, err := readStringAttr(motorPath, "driver_name")
 		if err != nil {
+			log.WithFields(log.Fields{"entry": entry.Name(), "error": err.Error()}).Debug("mindstorm: candidate missing driver_name attribute")
 			continue
 		}
+		log.WithFields(log.Fields{"entry": entry.Name(), "driver_name": name, "expected_driver": driverName}).Debug("mindstorm: comparing candidate driver")
 		if name == driverName {
+			log.WithFields(log.Fields{"entry": entry.Name(), "motor_path": motorPath}).Debug("mindstorm: matched motor by address and driver")
 			return motorPath, nil
 		}
 	}
@@ -263,6 +293,12 @@ func (d *BeltDrive) SetThrottle(throttle, turn float64) error {
 
 	leftSpeed := int(math.Round(leftMix * float64(d.maxSpeedTPS)))
 	rightSpeed := int(math.Round(rightMix * float64(d.maxSpeedTPS)))
+	log.WithFields(log.Fields{
+		"throttle":        throttle,
+		"turn":            turn,
+		"left_speed_tps":  leftSpeed,
+		"right_speed_tps": rightSpeed,
+	}).Debug("mindstorm: applying mixed belt speeds")
 
 	if err := d.left.RunForever(leftSpeed); err != nil {
 		return err

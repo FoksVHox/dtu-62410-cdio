@@ -41,8 +41,16 @@ func init() {
 }
 
 func rootCmdRun(cmd *cobra.Command, _ []string) {
-	log.Debug("running in debug mode")
+	log.WithField("command", cmd.Name()).Debug("running in debug mode")
 	motorCfg := config.Get().Mindstorm.Motors
+	log.WithFields(log.Fields{
+		"left_address":      motorCfg.Left.Address,
+		"left_driver_name":  motorCfg.Left.DriverName,
+		"left_inverted":     motorCfg.Left.Inverted,
+		"right_address":     motorCfg.Right.Address,
+		"right_driver_name": motorCfg.Right.DriverName,
+		"right_inverted":    motorCfg.Right.Inverted,
+	}).Debug("loaded motor configuration")
 
 	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{
 		Address:    motorCfg.Left.Address,
@@ -53,6 +61,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.WithError(err).Error("failed to initialize left motor")
 		return
 	}
+	log.Debug("left motor initialized")
 
 	right, err := mindstorm.NewMotor(mindstorm.MotorConfig{
 		Address:    motorCfg.Right.Address,
@@ -63,23 +72,29 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.WithError(err).Error("failed to initialize right motor")
 		return
 	}
+	log.Debug("right motor initialized")
 
 	drive, err := mindstorm.NewBeltDrive(left, right)
 	if err != nil {
 		log.WithError(err).Error("failed to initialize belt drive")
 		return
 	}
+	log.Debug("belt drive initialized")
 
 	defer func() {
+		log.Debug("stopping belt drive")
 		if stopErr := drive.Stop(); stopErr != nil {
 			log.WithError(stopErr).Error("failed to stop belt drive")
+			return
 		}
+		log.Debug("belt drive stopped")
 	}()
 
 	if err := drive.Drive(0.4); err != nil {
 		log.WithError(err).Error("failed to start belt drive")
 		return
 	}
+	log.WithField("throttle", 0.4).Debug("belt drive started")
 
 	log.Info("motors running for 30 seconds")
 	time.Sleep(30 * time.Second)

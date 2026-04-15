@@ -150,3 +150,36 @@ func TestNewMotorErrorIncludesDiscoveredMotors(t *testing.T) {
 	}
 }
 
+func TestNewMotorWithSymlinkClassEntry(t *testing.T) {
+	root := t.TempDir()
+	classPath := filepath.Join(root, "tacho-motor")
+	if err := os.MkdirAll(classPath, 0o755); err != nil {
+		t.Fatalf("mkdir class path: %v", err)
+	}
+
+	realMotor := filepath.Join(root, "devices", "motor0")
+	if err := os.MkdirAll(realMotor, 0o755); err != nil {
+		t.Fatalf("mkdir real motor dir: %v", err)
+	}
+
+	write := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(realMotor, name), []byte(value), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	write("address", "ev3-ports:outA\n")
+	write("driver_name", "lego-ev3-l-motor\n")
+	write("max_speed", "1050\n")
+
+	if err := os.Symlink(realMotor, filepath.Join(classPath, "motor0")); err != nil {
+		t.Fatalf("symlink motor0: %v", err)
+	}
+
+	_, err := NewMotor(MotorConfig{BasePath: classPath, Address: "motor0"})
+	if err != nil {
+		t.Fatalf("new motor via symlink class entry: %v", err)
+	}
+}
+
