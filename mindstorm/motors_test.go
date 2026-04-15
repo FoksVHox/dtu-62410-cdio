@@ -3,6 +3,7 @@ package mindstorm
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,61 @@ func TestBeltDriveMixing(t *testing.T) {
 	}
 	if string(rightSP) != "250" {
 		t.Fatalf("unexpected right speed_sp: %q", string(rightSP))
+	}
+}
+
+func TestNewMotorAddressAliases(t *testing.T) {
+	base := t.TempDir()
+	motor0 := filepath.Join(base, "motor0")
+	if err := os.MkdirAll(motor0, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	write := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(motor0, name), []byte(value), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	write("address", "ev3-ports:outA\n")
+	write("driver_name", "lego-ev3-l-motor\n")
+	write("max_speed", "1050\n")
+
+	for _, addr := range []string{"outA", "ev3-ports:outA", "motor0"} {
+		m, err := NewMotor(MotorConfig{BasePath: base, Address: addr})
+		if err != nil {
+			t.Fatalf("new motor (%s): %v", addr, err)
+		}
+		if m.address != addr {
+			t.Fatalf("unexpected stored address for %s: %q", addr, m.address)
+		}
+	}
+}
+
+func TestNewMotorErrorIncludesDiscoveredMotors(t *testing.T) {
+	base := t.TempDir()
+	motor0 := filepath.Join(base, "motor0")
+	if err := os.MkdirAll(motor0, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(motor0, "address"), []byte("ev3-ports:outA\n"), 0o644); err != nil {
+		t.Fatalf("write address: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(motor0, "driver_name"), []byte("lego-ev3-l-motor\n"), 0o644); err != nil {
+		t.Fatalf("write driver_name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(motor0, "max_speed"), []byte("1050\n"), 0o644); err != nil {
+		t.Fatalf("write max_speed: %v", err)
+	}
+
+	_, err := NewMotor(MotorConfig{BasePath: base, Address: "outB"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "motor0(address=ev3-ports:outA") {
+		t.Fatalf("error should include discovered motor details, got: %v", err)
 	}
 }
 

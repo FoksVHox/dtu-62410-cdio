@@ -131,6 +131,9 @@ func findMotorPath(basePath, address, driverName string) (string, error) {
 		return "", fmt.Errorf("mindstorm: read motor class path %q: %w", basePath, err)
 	}
 
+	targetAddress := normalizeAddress(address)
+	var discovered []string
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -141,7 +144,14 @@ func findMotorPath(basePath, address, driverName string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if motorAddress != address {
+		if name, nameErr := readStringAttr(motorPath, "driver_name"); nameErr == nil {
+			discovered = append(discovered, fmt.Sprintf("%s(address=%s,driver=%s)", entry.Name(), motorAddress, name))
+		} else {
+			discovered = append(discovered, fmt.Sprintf("%s(address=%s)", entry.Name(), motorAddress))
+		}
+
+		discoveredAddress := normalizeAddress(motorAddress)
+		if discoveredAddress != targetAddress && entry.Name() != address {
 			continue
 		}
 
@@ -158,10 +168,22 @@ func findMotorPath(basePath, address, driverName string) (string, error) {
 		}
 	}
 
-	if driverName == "" {
-		return "", fmt.Errorf("mindstorm: motor at %q not found in %q", address, basePath)
+	if len(discovered) == 0 {
+		discovered = append(discovered, "none")
 	}
-	return "", fmt.Errorf("mindstorm: motor at %q with driver %q not found in %q", address, driverName, basePath)
+
+	if driverName == "" {
+		return "", fmt.Errorf("mindstorm: motor at %q not found in %q (discovered: %s)", address, basePath, strings.Join(discovered, ", "))
+	}
+	return "", fmt.Errorf("mindstorm: motor at %q with driver %q not found in %q (discovered: %s)", address, driverName, basePath, strings.Join(discovered, ", "))
+}
+
+func normalizeAddress(address string) string {
+	a := strings.TrimSpace(address)
+	if i := strings.LastIndex(a, ":"); i != -1 {
+		a = a[i+1:]
+	}
+	return a
 }
 
 func readIntAttr(dirPath, name string) (int, error) {

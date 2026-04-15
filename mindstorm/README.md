@@ -4,7 +4,7 @@ This package provides a small EV3dev SDK for belt-driven robots using `tacho-mot
 
 ## What it includes
 
-- Motor discovery by `address` (and optional `driver_name`).
+- Motor discovery by `address` (and optional `driver_name`), accepting `outA`, `ev3-ports:outA`, or sysfs dir names like `motor0`.
 - Speed clamping based on EV3dev `max_speed`.
 - Motor commands: `RunForever`, `RunTimed`, `Stop`, and `Reset`.
 - Differential belt mixing with `BeltDrive` (`Drive`, `Turn`, `SetThrottle`, `Stop`).
