@@ -43,13 +43,13 @@ func init() {
 func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.Debug("running in debug mode")
 
-	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "outA"})
+	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "motor0"})
 	if err != nil {
 		log.WithError(err).Error("failed to initialize left motor")
 		return
 	}
 
-	right, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "outB", Inverted: true})
+	right, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "motor2", Inverted: true})
 	if err != nil {
 		log.WithError(err).Error("failed to initialize right motor")
 		return
