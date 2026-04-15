@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bot/config"
+	"bot/mindstorm"
 	log2 "log"
 	"path/filepath"
+	"time"
 
 	"github.com/NYTimes/logrotate"
 	"github.com/apex/log"
@@ -40,6 +42,38 @@ func init() {
 
 func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.Debug("running in debug mode")
+
+	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "outA"})
+	if err != nil {
+		log.WithError(err).Error("failed to initialize left motor")
+		return
+	}
+
+	right, err := mindstorm.NewMotor(mindstorm.MotorConfig{Address: "outB", Inverted: true})
+	if err != nil {
+		log.WithError(err).Error("failed to initialize right motor")
+		return
+	}
+
+	drive, err := mindstorm.NewBeltDrive(left, right)
+	if err != nil {
+		log.WithError(err).Error("failed to initialize belt drive")
+		return
+	}
+
+	defer func() {
+		if stopErr := drive.Stop(); stopErr != nil {
+			log.WithError(stopErr).Error("failed to stop belt drive")
+		}
+	}()
+
+	if err := drive.Drive(0.4); err != nil {
+		log.WithError(err).Error("failed to start belt drive")
+		return
+	}
+
+	log.Info("motors running for 30 seconds")
+	time.Sleep(30 * time.Second)
 }
 
 // Reads the configuration from the disk and then sets up the global singleton

@@ -1,1 +1,6 @@
    • writing log files to disk path=logs/bot.log
+   • writing log files to disk path=logs/bot.log
+   • writing log files to disk path=logs/bot.log
+   ⨯ failed to initialize left motor error=mindstorm: read motor class path "/sys/class/tacho-motor": open /sys/class/tacho-motor: no such file or directory
+[34m[1m   •[0m writing log files to disk[0m [34mpath[0m=logs/bot.log
+[31m[1m   ⨯[0m failed to initialize left motor[0m [31merror[0m=mindstorm: read motor class path "/sys/class/tacho-motor": open /sys/class/tacho-motor: no such file or directory

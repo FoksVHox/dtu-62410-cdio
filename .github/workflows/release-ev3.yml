@@ -1,0 +1,97 @@
+name: Release EV3 build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Determine next version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          latest_tag="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+
+          if [ -z "${latest_tag}" ]; then
+            latest_tag="v0.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+          next_tag="v${major}.${minor}.$((patch + 1))"
+
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Go binary for EV3
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 5
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          APP_NAME="62410-bot"
+          OUT="dist/bot-ev3"
+
+          go mod download
+          go build -trimpath -ldflags="-s -w" -o "${OUT}" .
+
+          file "${OUT}"
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ steps.version.outputs.next_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub release and upload binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.next_tag }}
+          PREV_TAG: ${{ steps.version.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+
+          APP_NAME="62410-bot"
+          FILE="dist/bot-ev3"
+
+          if [ "${PREV_TAG}" = "v0.0.0" ]; then
+            NOTES="Initial release ${TAG}"
+          else
+            NOTES="Automated release ${TAG} (previous: ${PREV_TAG})"
+          fi
+
+          gh release create "${TAG}" \
+            "${FILE}" \
+            --title "${TAG}" \
+            --notes "${NOTES}"
