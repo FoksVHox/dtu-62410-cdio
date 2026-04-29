@@ -320,6 +320,14 @@ func (d *BeltDrive) Stop() error {
 	return nil
 }
 
+func (d *BeltDrive) TurnLeft(f float64) {
+
+}
+
+func (d *BeltDrive) TurnRight(f float64) {
+
+}
+
 func clampUnit(v float64) float64 {
 	if v > 1.0 {
 		return 1.0
