@@ -14,24 +14,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
 
-    env:
-      CGO_ENABLED: 1
-      GOOS: linux
-      GOARCH: arm
-      GOARM: 5
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
-      - name: Set up QEMU (required for ARM containers)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm
@@ -66,7 +55,7 @@ jobs:
             --platform linux/arm/v5 \
             -v "$PWD:/src" \
             -w /src \
-            arm32v5/golang:bookworm \
+            golang:bookworm \
             bash -lc '
               set -euo pipefail
 
@@ -83,6 +72,9 @@ jobs:
               export GOOS=linux
               export GOARCH=arm
               export GOARM=5
+
+              go version
+              go env
 
               go mod download
               go build -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
