@@ -55,12 +55,13 @@ jobs:
             --platform linux/arm/v5 \
             -v "$PWD:/src" \
             -w /src \
-            golang:bookworm \
+            arm32v5/debian:bookworm \
             bash -lc '
               set -euo pipefail
 
               apt-get update
               apt-get install -y --no-install-recommends \
+                golang-go \
                 build-essential \
                 pkg-config \
                 libopencv-dev \
@@ -68,13 +69,14 @@ jobs:
                 ca-certificates \
                 git
 
+              export PATH="/usr/lib/go/bin:/usr/lib/go-1.19/bin:$PATH"
               export CGO_ENABLED=1
               export GOOS=linux
               export GOARCH=arm
               export GOARM=5
 
               go version
-              go env
+              go env GOOS GOARCH GOARM CGO_ENABLED
 
               go mod download
               go build -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
