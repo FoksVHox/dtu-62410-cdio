@@ -14,6 +14,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
 
+    env:
+      CGO_ENABLED: 1
+      GOOS: linux
+      GOARCH: arm
+      GOARM: 5
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -24,6 +30,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+
+      - name: Set up QEMU (required for ARM containers)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
 
       - name: Determine next version
         id: version
@@ -50,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          
+
           docker run --rm \
             --platform linux/arm/v5 \
             -v "$PWD:/src" \
@@ -58,7 +69,7 @@ jobs:
             arm32v5/golang:bookworm \
             bash -lc '
               set -euo pipefail
-          
+
               apt-get update
               apt-get install -y --no-install-recommends \
                 build-essential \
@@ -67,15 +78,15 @@ jobs:
                 file \
                 ca-certificates \
                 git
-          
+
               export CGO_ENABLED=1
               export GOOS=linux
               export GOARCH=arm
               export GOARM=5
-          
+
               go mod download
               go build -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
-          
+
               file dist/bot-ev3
             '
 
@@ -97,7 +108,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          APP_NAME="62410-bot"
           FILE="dist/bot-ev3"
 
           if [ "${PREV_TAG}" = "v0.0.0" ]; then
