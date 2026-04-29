@@ -29,9 +29,13 @@ func NavigateTo(drive *mindstorm.BeltDrive, state CourseState, target Point) err
 	// Turn in place: one motor forward, one backward
 	if math.Abs(angle) > 5 { // 5° dead zone to avoid jitter
 		if angle > 0 {
-			drive.TurnLeft(0.3)
+			if err := drive.TurnLeft(0.3); err != nil {
+				return err
+			}
 		} else {
-			drive.TurnRight(0.3)
+			if err := drive.TurnRight(0.3); err != nil {
+				return err
+			}
 		}
 		// Duration proportional to angle — needs calibration on real hardware
 		time.Sleep(time.Duration(math.Abs(angle)*10) * time.Millisecond)

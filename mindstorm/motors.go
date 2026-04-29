@@ -320,12 +320,12 @@ func (d *BeltDrive) Stop() error {
 	return nil
 }
 
-func (d *BeltDrive) TurnLeft(f float64) {
-
+func (d *BeltDrive) TurnLeft(f float64) error {
+	return d.Turn(f)
 }
 
-func (d *BeltDrive) TurnRight(f float64) {
-
+func (d *BeltDrive) TurnRight(f float64) error {
+	return d.Turn(-f)
 }
 
 func clampUnit(v float64) float64 {
