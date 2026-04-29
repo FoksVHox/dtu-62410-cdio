@@ -55,12 +55,13 @@ jobs:
             --platform linux/arm/v6 \
             -v "$PWD:/src" \
             -w /src \
-            arm32v6/golang:bookworm \
+            arm32v6/debian:bookworm \
             bash -lc '
               set -euo pipefail
 
               apt-get update
               apt-get install -y --no-install-recommends \
+                golang-go \
                 build-essential \
                 pkg-config \
                 libopencv-dev \
@@ -74,7 +75,6 @@ jobs:
               export GOARM=6
 
               go version
-
               go mod download
               go build -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
 
