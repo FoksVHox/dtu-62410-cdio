@@ -12,7 +12,6 @@ import (
 	"github.com/apex/log/handlers/cli"
 	"github.com/apex/log/handlers/multi"
 	"github.com/spf13/cobra"
-	"gocv.io/x/gocv"
 )
 
 var (
@@ -99,16 +98,6 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 
 	log.Info("motors running for 30 seconds")
 	time.Sleep(30 * time.Second)
-
-	webcam, _ := gocv.VideoCaptureDevice(0)
-	window := gocv.NewWindow("Hello")
-	img := gocv.NewMat()
-
-	for {
-		webcam.Read(&img)
-		window.IMShow(img)
-		window.WaitKey(1)
-	}
 }
 
 // Reads the configuration from the disk and then sets up the global singleton

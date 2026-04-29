@@ -46,60 +46,31 @@ jobs:
           echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
           echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
 
-      - name: Install ARM toolchain and OpenCV headers
-        run: |
-          set -euo pipefail
-
-          sudo dpkg --add-architecture armel
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            gcc-arm-linux-gnueabi \
-            g++-arm-linux-gnueabi \
-            pkg-config \
-            libc6-dev-armel-cross \
-            libstdc++-12-dev-armel-cross \
-            libopencv-dev:armel
-
-      - name: Build GoCV binary for EV3
+      - name: Build Go binary for EV3
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 5
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          export CGO_ENABLED=1
-          export GOOS=linux
-          export GOARCH=arm
-          export GOARM=5
-
-          export CC=arm-linux-gnueabi-gcc
-          export CXX=arm-linux-gnueabi-g++
-
-          export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabi/pkgconfig:/usr/share/pkgconfig"
-          export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabi/pkgconfig:/usr/share/pkgconfig"
-
-          export CGO_CFLAGS="$(pkg-config --cflags opencv4)"
-          export CGO_CXXFLAGS="$(pkg-config --cflags opencv4)"
-          export CGO_LDFLAGS="$(pkg-config --libs opencv4)"
-
-          go version
-          pkg-config --modversion opencv4
-          pkg-config --cflags opencv4
-          pkg-config --libs opencv4
+          APP_NAME="62410-bot"
+          OUT="dist/bot-ev3"
 
           go mod download
-          go build -v -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
+          go build -trimpath -ldflags="-s -w" -o "${OUT}" .
 
-          file dist/bot-ev3
+          file "${OUT}"
 
       - name: Create and push tag
         env:
           TAG: ${{ steps.version.outputs.next_tag }}
         run: |
           set -euo pipefail
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git tag "${TAG}"
           git push origin "${TAG}"
 
@@ -111,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          APP_NAME="62410-bot"
           FILE="dist/bot-ev3"
 
           if [ "${PREV_TAG}" = "v0.0.0" ]; then
