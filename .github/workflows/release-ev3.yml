@@ -20,10 +20,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          platforms: arm
+          go-version: 'stable'
 
       - name: Determine next version
         id: version
@@ -46,48 +46,60 @@ jobs:
           echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
           echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
 
+      - name: Install ARM toolchain and OpenCV headers
+        run: |
+          set -euo pipefail
+
+          sudo dpkg --add-architecture armel
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabi \
+            g++-arm-linux-gnueabi \
+            pkg-config \
+            libc6-dev-armel-cross \
+            libstdc++-12-dev-armel-cross \
+            libopencv-dev:armel
+
       - name: Build GoCV binary for EV3
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          docker run --rm \
-            --platform linux/arm/v6 \
-            -v "$PWD:/src" \
-            -w /src \
-            arm32v6/debian:bookworm \
-            bash -lc '
-              set -euo pipefail
+          export CGO_ENABLED=1
+          export GOOS=linux
+          export GOARCH=arm
+          export GOARM=5
 
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                golang-go \
-                build-essential \
-                pkg-config \
-                libopencv-dev \
-                file \
-                ca-certificates \
-                git
+          export CC=arm-linux-gnueabi-gcc
+          export CXX=arm-linux-gnueabi-g++
 
-              export CGO_ENABLED=1
-              export GOOS=linux
-              export GOARCH=arm
-              export GOARM=6
+          export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabi/pkgconfig:/usr/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabi/pkgconfig:/usr/share/pkgconfig"
 
-              go version
-              go mod download
-              go build -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
+          export CGO_CFLAGS="$(pkg-config --cflags opencv4)"
+          export CGO_CXXFLAGS="$(pkg-config --cflags opencv4)"
+          export CGO_LDFLAGS="$(pkg-config --libs opencv4)"
 
-              file dist/bot-ev3
-            '
+          go version
+          pkg-config --modversion opencv4
+          pkg-config --cflags opencv4
+          pkg-config --libs opencv4
+
+          go mod download
+          go build -v -trimpath -ldflags="-s -w" -o dist/bot-ev3 .
+
+          file dist/bot-ev3
 
       - name: Create and push tag
         env:
           TAG: ${{ steps.version.outputs.next_tag }}
         run: |
           set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git tag "${TAG}"
           git push origin "${TAG}"
 
