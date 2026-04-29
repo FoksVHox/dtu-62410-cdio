@@ -10,6 +10,7 @@ require (
 	github.com/fatih/color v1.7.0
 	github.com/mattn/go-colorable v0.1.2
 	github.com/spf13/cobra v1.10.2
+	gocv.io/x/gocv v0.43.0
 	gopkg.in/yaml.v3 v3.0.0-20200605160147-a5ece683394c
 )
 
