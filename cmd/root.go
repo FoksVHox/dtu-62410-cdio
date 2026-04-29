@@ -3,16 +3,16 @@ package cmd
 import (
 	"bot/config"
 	"bot/mindstorm"
+	"bot/navigation"
+	//"bot/vison" //TODO: implement vision
 	log2 "log"
 	"path/filepath"
-	"time"
 
 	"github.com/NYTimes/logrotate"
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
 	"github.com/apex/log/handlers/multi"
 	"github.com/spf13/cobra"
-	"gocv.io/x/gocv"
 )
 
 var (
@@ -91,7 +91,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Debug("belt drive stopped")
 	}()
 
-	if err := drive.Drive(0.4); err != nil {
+	/* if err := drive.Drive(0.4); err != nil {
 		log.WithError(err).Error("failed to start belt drive")
 		return
 	}
@@ -108,6 +108,29 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		webcam.Read(&img)
 		window.IMShow(img)
 		window.WaitKey(1)
+	}*/
+	log.Info("starting navigation loop")
+	for {
+		state := vision.GetCourseState() // vision team implements this
+
+		target, ok := navigation.PickNextBall(state)
+		if !ok {
+			log.Info("no balls left, driving to goal")
+			if err := navigation.NavigateTo(drive, state, state.Goal); err != nil {
+				log.WithError(err).Error("failed to navigate to goal")
+			}
+			break
+		}
+
+		log.WithFields(log.Fields{
+			"target_x": target.X,
+			"target_y": target.Y,
+		}).Info("navigating to ball")
+
+		if err := navigation.NavigateTo(drive, state, target); err != nil {
+			log.WithError(err).Error("failed to navigate to ball")
+			break
+		}
 	}
 }
 
