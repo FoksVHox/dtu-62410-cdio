@@ -39,13 +39,19 @@ func NavigateTo(drive *mindstorm.BeltDrive, state CourseState, target Point) err
 		}
 		// Duration proportional to angle — needs calibration on real hardware
 		time.Sleep(time.Duration(math.Abs(angle)*10) * time.Millisecond)
-		drive.Stop()
+		if err := drive.Stop(); err != nil {
+			return err
+		}
 	}
 
 	// Drive forward toward target
 	dist := Distance(state.Robot.Position, target)
-	drive.Drive(0.4)
+	if err := drive.Drive(0.4); err != nil {
+		return err
+	}
 	time.Sleep(time.Duration(dist*20) * time.Millisecond) // calibrate multiplier
-	drive.Stop()
+	if err := drive.Stop(); err != nil {
+		return err
+	}
 	return nil
 }
