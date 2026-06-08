@@ -4,7 +4,10 @@ import (
 	"bot/config"
 	"bot/mindstorm"
 	log2 "log"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/NYTimes/logrotate"
@@ -59,12 +62,6 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		"motor_test_time":    motorCfg.MotorTestTime,
 	}).Debug("loaded motor configuration")
 
-	// Motor tests are a debug-only path and must be explicitly enabled via --debug.
-	if !debug {
-		log.Info("skipping motor tests (enable with --debug)")
-		return
-	}
-
 	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{
 		Address:    motorCfg.Left.Address,
 		DriverName: motorCfg.Left.DriverName,
@@ -105,6 +102,10 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.Debug("belt drive initialized")
 
+	// Setup signal handler for graceful shutdown on CTRL-C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
 	defer func() {
 		log.Debug("stopping belt drive")
 		if stopErr := drive.Stop(); stopErr != nil {
@@ -119,42 +120,59 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Debug("head motor stopped")
 	}()
 
+	// Run motor tests if debug mode is enabled
+	if debug {
+		// Test belt drive
+		log.Info("starting belt drive test")
+		if err := drive.Drive(motorCfg.Left.Speed); err != nil {
+			log.WithError(err).Error("failed to start belt drive")
+			return
+		}
+		log.WithField("throttle", motorCfg.Left.Speed).Info("belt drive started")
 
-	// Test belt drive
-	log.Info("starting belt drive test")
-	if err := drive.Drive(motorCfg.Left.Speed); err != nil {
-		log.WithError(err).Error("failed to start belt drive")
-		return
+		testDuration := motorCfg.MotorTestTime
+		log.WithField("duration_seconds", testDuration.Seconds()).Info("belt drive will run for configured duration")
+		time.Sleep(testDuration)
+		log.Info("belt drive test duration complete")
+
+		// Stop belt drive
+		log.Debug("stopping belt drive")
+		if err := drive.Stop(); err != nil {
+			log.WithError(err).Error("failed to stop belt drive")
+		}
+		log.Debug("belt drive stopped")
+
+		// Test head motor
+		log.Info("starting head motor test")
+		headSpeed := int(float64(head.MaxSpeedTPS()) * motorCfg.Head.Speed)
+		if err := head.RunTimed(headSpeed, int(testDuration.Milliseconds())); err != nil {
+			log.WithError(err).Error("failed to start head motor")
+			return
+		}
+		log.WithFields(log.Fields{
+			"speed_tps":        headSpeed,
+			"speed_ratio":      motorCfg.Head.Speed,
+			"duration_seconds": testDuration.Seconds(),
+		}).Info("head motor started with timed run")
+
+		time.Sleep(testDuration)
+		log.Info("head motor test duration complete")
+	} else {
+		log.Info("skipping motor tests (enable with --debug)")
 	}
-	log.WithField("throttle", motorCfg.Left.Speed).Info("belt drive started")
 
-	testDuration := motorCfg.MotorTestTime
-	log.WithField("duration_seconds", testDuration.Seconds()).Info("belt drive will run for configured duration")
-	time.Sleep(testDuration)
-	log.Info("belt drive test duration complete")
-
-	// Stop belt drive
-	log.Debug("stopping belt drive")
-	if err := drive.Stop(); err != nil {
-		log.WithError(err).Error("failed to stop belt drive")
-	}
-	log.Debug("belt drive stopped")
-
-	// Test head motor
-	log.Info("starting head motor test")
+	// Run head motor continuously until interrupted
+	log.Info("starting continuous head motor operation (press CTRL-C to stop)")
 	headSpeed := int(float64(head.MaxSpeedTPS()) * motorCfg.Head.Speed)
-	if err := head.RunTimed(headSpeed, int(testDuration.Milliseconds())); err != nil {
-		log.WithError(err).Error("failed to start head motor")
+	if err := head.RunForever(headSpeed); err != nil {
+		log.WithError(err).Error("failed to start head motor for continuous operation")
 		return
 	}
-	log.WithFields(log.Fields{
-		"speed_tps":        headSpeed,
-		"speed_ratio":      motorCfg.Head.Speed,
-		"duration_seconds": testDuration.Seconds(),
-	}).Info("head motor started with timed run")
+	log.WithField("speed_tps", headSpeed).Info("head motor running continuously")
 
-	time.Sleep(testDuration)
-	log.Info("head motor test duration complete")
+	// Wait for interrupt signal
+	<-sigChan
+	log.Info("interrupt signal received, shutting down")
 }
 
 // Reads the configuration from the disk and then sets up the global singleton
