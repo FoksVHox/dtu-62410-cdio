@@ -15,4 +15,8 @@ mindstorm:
       address: motor2
       inverted: true
       speed: 0.5
+    back:
+      address: motor1
+      inverted: false
+      speed: 0.5
     motor_test_time: 30s

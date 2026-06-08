@@ -95,6 +95,17 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.Debug("head motor initialized")
 
+	back, err := mindstorm.NewMotor(mindstorm.MotorConfig{
+		Address:    motorCfg.Back.Address,
+		DriverName: motorCfg.Back.DriverName,
+		Inverted:   motorCfg.Back.Inverted,
+	})
+	if err != nil {
+		log.WithError(err).Error("failed to initialize back motor")
+		return
+	}
+	log.Debug("back motor initialized")
+
 	drive, err := mindstorm.NewBeltDrive(left, right)
 	if err != nil {
 		log.WithError(err).Error("failed to initialize belt drive")
@@ -118,6 +129,12 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 			log.WithError(stopErr).Error("failed to stop head motor")
 		}
 		log.Debug("head motor stopped")
+
+		log.Debug("stopping back motor")
+		if stopErr := back.Stop(config.Get().Mindstorm.EV3.DefaultStopAction); stopErr != nil {
+			log.WithError(stopErr).Error("failed to stop back motor")
+		}
+		log.Debug("back motor stopped")
 	}()
 
 	// Run motor tests if debug mode is enabled
@@ -157,6 +174,22 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 
 		time.Sleep(testDuration)
 		log.Info("head motor test duration complete")
+
+		// Test back motor
+		log.Info("starting back motor test")
+		backSpeed := int(float64(back.MaxSpeedTPS()) * motorCfg.Back.Speed)
+		if err := back.RunTimed(backSpeed, int(testDuration.Milliseconds())); err != nil {
+			log.WithError(err).Error("failed to start back motor")
+			return
+		}
+		log.WithFields(log.Fields{
+			"speed_tps":        backSpeed,
+			"speed_ratio":      motorCfg.Back.Speed,
+			"duration_seconds": testDuration.Seconds(),
+		}).Info("back motor started with timed run")
+
+		time.Sleep(testDuration)
+		log.Info("back motor test duration complete")
 	} else {
 		log.Info("skipping motor tests (enable with --debug)")
 	}
@@ -169,6 +202,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 	log.WithField("speed_tps", headSpeed).Info("head motor running continuously")
+
+	// Run back motor continuously after head motor
+	log.Info("starting continuous back motor operation")
+	backSpeed := int(float64(back.MaxSpeedTPS()) * motorCfg.Back.Speed)
+	if err := back.RunForever(backSpeed); err != nil {
+		log.WithError(err).Error("failed to start back motor for continuous operation")
+		return
+	}
+	log.WithField("speed_tps", backSpeed).Info("back motor running continuously (press CTRL-C to stop)")
 
 	// Wait for interrupt signal
 	<-sigChan
