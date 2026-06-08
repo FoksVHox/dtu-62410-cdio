@@ -97,7 +97,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.WithField("throttle", 0.4).Debug("belt drive started")
 
 	log.Info("motors running for 30 seconds")
-	time.Sleep(30 * time.Second)
+	time.Sleep(config.Get().Mindstorm.Motors.MotorTestTime * time.Second)
 }
 
 // Reads the configuration from the disk and then sets up the global singleton

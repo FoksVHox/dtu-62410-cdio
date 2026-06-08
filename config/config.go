@@ -47,8 +47,9 @@ type MotorConfiguration struct {
 
 // MotorsConfiguration defines left/right motor mappings for the belt drive.
 type MotorsConfiguration struct {
-	Left  MotorConfiguration `json:"left" yaml:"left"`
-	Right MotorConfiguration `json:"right" yaml:"right"`
+	Left          MotorConfiguration `json:"left" yaml:"left"`
+	Right         MotorConfiguration `json:"right" yaml:"right"`
+	MotorTestTime int                `json:"motor_test_time" yaml:"motor_test_time"`
 }
 
 // MindstormConfiguration defines defaults for the EV3 SDK package.
