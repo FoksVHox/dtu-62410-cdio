@@ -113,6 +113,12 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Debug("head motor stopped")
 	}()
 
+	// Only run motor tests in debug mode
+	if !config.Get().Debug {
+		log.Info("skipping motor tests (debug mode not enabled)")
+		return
+	}
+
 	// Test belt drive
 	log.Info("starting belt drive test")
 	if err := drive.Drive(motorCfg.Left.Speed); err != nil {
