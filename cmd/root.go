@@ -44,15 +44,19 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.WithField("command", cmd.Name()).Debug("running in debug mode")
 	motorCfg := config.Get().Mindstorm.Motors
 	log.WithFields(log.Fields{
-		"left_address":      motorCfg.Left.Address,
-		"left_driver_name":  motorCfg.Left.DriverName,
-		"left_inverted":     motorCfg.Left.Inverted,
-		"right_address":     motorCfg.Right.Address,
-		"right_driver_name": motorCfg.Right.DriverName,
-		"right_inverted":    motorCfg.Right.Inverted,
-		"head_address":      motorCfg.Head.Address,
-		"head_driver_name":  motorCfg.Head.DriverName,
-		"head_inverted":     motorCfg.Head.Inverted,
+		"left_address":       motorCfg.Left.Address,
+		"left_driver_name":   motorCfg.Left.DriverName,
+		"left_inverted":      motorCfg.Left.Inverted,
+		"left_speed":         motorCfg.Left.Speed,
+		"right_address":      motorCfg.Right.Address,
+		"right_driver_name":  motorCfg.Right.DriverName,
+		"right_inverted":     motorCfg.Right.Inverted,
+		"right_speed":        motorCfg.Right.Speed,
+		"head_address":       motorCfg.Head.Address,
+		"head_driver_name":   motorCfg.Head.DriverName,
+		"head_inverted":      motorCfg.Head.Inverted,
+		"head_speed":         motorCfg.Head.Speed,
+		"motor_test_time":    motorCfg.MotorTestTime,
 	}).Debug("loaded motor configuration")
 
 	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{
@@ -111,30 +115,38 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 
 	// Test belt drive
 	log.Info("starting belt drive test")
-	if err := drive.Drive(0.4); err != nil {
+	if err := drive.Drive(motorCfg.Left.Speed); err != nil {
 		log.WithError(err).Error("failed to start belt drive")
 		return
 	}
-	log.WithField("throttle", 0.4).Info("belt drive started")
+	log.WithField("throttle", motorCfg.Left.Speed).Info("belt drive started")
 
 	testDuration := motorCfg.MotorTestTime
-	log.WithField("duration_seconds", testDuration).Info("belt drive will run for configured duration")
-	time.Sleep(time.Duration(testDuration) * time.Second)
+	log.WithField("duration_seconds", testDuration.Seconds()).Info("belt drive will run for configured duration")
+	time.Sleep(testDuration)
 	log.Info("belt drive test duration complete")
+
+	// Stop belt drive
+	log.Debug("stopping belt drive")
+	if err := drive.Stop(); err != nil {
+		log.WithError(err).Error("failed to stop belt drive")
+	}
+	log.Debug("belt drive stopped")
 
 	// Test head motor
 	log.Info("starting head motor test")
-	headSpeed := int(float64(head.MaxSpeedTPS()) * 0.5) // 50% speed
-	if err := head.RunTimed(headSpeed, int(testDuration)); err != nil {
+	headSpeed := int(float64(head.MaxSpeedTPS()) * motorCfg.Head.Speed)
+	if err := head.RunTimed(headSpeed, int(testDuration.Milliseconds())); err != nil {
 		log.WithError(err).Error("failed to start head motor")
 		return
 	}
 	log.WithFields(log.Fields{
 		"speed_tps":        headSpeed,
-		"duration_seconds": testDuration,
+		"speed_ratio":      motorCfg.Head.Speed,
+		"duration_seconds": testDuration.Seconds(),
 	}).Info("head motor started with timed run")
 
-	time.Sleep(time.Duration(testDuration) * time.Second)
+	time.Sleep(testDuration)
 	log.Info("head motor test duration complete")
 }
 

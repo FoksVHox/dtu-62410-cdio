@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"sync"
+	"time"
 
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
@@ -40,9 +41,10 @@ type EV3Configuration struct {
 
 // MotorConfiguration defines how a single motor should be discovered and controlled.
 type MotorConfiguration struct {
-	Address    string `json:"address" yaml:"address"`
-	DriverName string `json:"driver_name" yaml:"driver_name"`
-	Inverted   bool   `json:"inverted" yaml:"inverted"`
+	Address    string  `json:"address" yaml:"address"`
+	DriverName string  `json:"driver_name" yaml:"driver_name"`
+	Inverted   bool    `json:"inverted" yaml:"inverted"`
+	Speed      float64 `default:"0.5" json:"speed" yaml:"speed"`
 }
 
 // MotorsConfiguration defines left/right motor mappings for the belt drive.
@@ -50,7 +52,7 @@ type MotorsConfiguration struct {
 	Left          MotorConfiguration `json:"left" yaml:"left"`
 	Right         MotorConfiguration `json:"right" yaml:"right"`
 	Head          MotorConfiguration `json:"head" yaml:"head"`
-	MotorTestTime int                `json:"motor_test_time" yaml:"motor_test_time"`
+	MotorTestTime time.Duration      `json:"motor_test_time" yaml:"motor_test_time"`
 }
 
 // MindstormConfiguration defines defaults for the EV3 SDK package.

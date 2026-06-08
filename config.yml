@@ -6,10 +6,13 @@ mindstorm:
     left:
       address: motor0
       inverted: false
+      speed: 0.4
     right:
       address: motor2
       inverted: true
+      speed: 0.4
     head:
       address: motor2
       inverted: true
-    motor_test_time: 30
+      speed: 0.5
+    motor_test_time: 30s
