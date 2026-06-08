@@ -3,6 +3,7 @@ package cmd
 import (
 	"bot/config"
 	"bot/mindstorm"
+	"fmt"
 	log2 "log"
 	"path/filepath"
 	"time"
@@ -96,8 +97,8 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("throttle", 0.4).Debug("belt drive started")
 
-	log.Info("motors running for " + config.Get().Mindstorm.Motors.MotorTestTime.String() + " seconds")
-	time.Sleep(config.Get().Mindstorm.Motors.MotorTestTime * time.Second)
+	log.Info(fmt.Sprintf("motors running for %d seconds", config.Get().Mindstorm.Motors.MotorTestTime))
+	time.Sleep(time.Duration(config.Get().Mindstorm.Motors.MotorTestTime) * time.Second)
 }
 
 // Reads the configuration from the disk and then sets up the global singleton

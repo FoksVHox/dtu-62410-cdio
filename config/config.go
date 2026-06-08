@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"sync"
-	"time"
 
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
@@ -50,7 +49,7 @@ type MotorConfiguration struct {
 type MotorsConfiguration struct {
 	Left          MotorConfiguration `json:"left" yaml:"left"`
 	Right         MotorConfiguration `json:"right" yaml:"right"`
-	MotorTestTime time.Duration      `json:"motor_test_time" yaml:"motor_test_time"`
+	MotorTestTime int                `json:"motor_test_time" yaml:"motor_test_time"`
 }
 
 // MindstormConfiguration defines defaults for the EV3 SDK package.
