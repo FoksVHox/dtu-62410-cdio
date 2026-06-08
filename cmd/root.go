@@ -96,7 +96,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("throttle", 0.4).Debug("belt drive started")
 
-	log.Info("motors running for 30 seconds")
+	log.Info("motors running for " + config.Get().Mindstorm.Motors.MotorTestTime.String() + " seconds")
 	time.Sleep(config.Get().Mindstorm.Motors.MotorTestTime * time.Second)
 }
 
