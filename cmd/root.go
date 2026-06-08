@@ -3,7 +3,6 @@ package cmd
 import (
 	"bot/config"
 	"bot/mindstorm"
-	"fmt"
 	log2 "log"
 	"path/filepath"
 	"time"
@@ -51,6 +50,9 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		"right_address":     motorCfg.Right.Address,
 		"right_driver_name": motorCfg.Right.DriverName,
 		"right_inverted":    motorCfg.Right.Inverted,
+		"head_address":      motorCfg.Head.Address,
+		"head_driver_name":  motorCfg.Head.DriverName,
+		"head_inverted":     motorCfg.Head.Inverted,
 	}).Debug("loaded motor configuration")
 
 	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{
@@ -75,6 +77,17 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.Debug("right motor initialized")
 
+	head, err := mindstorm.NewMotor(mindstorm.MotorConfig{
+		Address:    motorCfg.Head.Address,
+		DriverName: motorCfg.Head.DriverName,
+		Inverted:   motorCfg.Head.Inverted,
+	})
+	if err != nil {
+		log.WithError(err).Error("failed to initialize head motor")
+		return
+	}
+	log.Debug("head motor initialized")
+
 	drive, err := mindstorm.NewBeltDrive(left, right)
 	if err != nil {
 		log.WithError(err).Error("failed to initialize belt drive")
@@ -86,19 +99,43 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Debug("stopping belt drive")
 		if stopErr := drive.Stop(); stopErr != nil {
 			log.WithError(stopErr).Error("failed to stop belt drive")
-			return
 		}
 		log.Debug("belt drive stopped")
+
+		log.Debug("stopping head motor")
+		if stopErr := head.Stop(config.Get().Mindstorm.EV3.DefaultStopAction); stopErr != nil {
+			log.WithError(stopErr).Error("failed to stop head motor")
+		}
+		log.Debug("head motor stopped")
 	}()
 
+	// Test belt drive
+	log.Info("starting belt drive test")
 	if err := drive.Drive(0.4); err != nil {
 		log.WithError(err).Error("failed to start belt drive")
 		return
 	}
-	log.WithField("throttle", 0.4).Debug("belt drive started")
+	log.WithField("throttle", 0.4).Info("belt drive started")
 
-	log.Info(fmt.Sprintf("motors running for %d seconds", config.Get().Mindstorm.Motors.MotorTestTime))
-	time.Sleep(time.Duration(config.Get().Mindstorm.Motors.MotorTestTime) * time.Second)
+	testDuration := motorCfg.MotorTestTime
+	log.WithField("duration_seconds", testDuration).Info("belt drive will run for configured duration")
+	time.Sleep(time.Duration(testDuration) * time.Second)
+	log.Info("belt drive test duration complete")
+
+	// Test head motor
+	log.Info("starting head motor test")
+	headSpeed := int(float64(head.MaxSpeedTPS()) * 0.5) // 50% speed
+	if err := head.RunTimed(headSpeed, int(testDuration)); err != nil {
+		log.WithError(err).Error("failed to start head motor")
+		return
+	}
+	log.WithFields(log.Fields{
+		"speed_tps":        headSpeed,
+		"duration_seconds": testDuration,
+	}).Info("head motor started with timed run")
+
+	time.Sleep(time.Duration(testDuration) * time.Second)
+	log.Info("head motor test duration complete")
 }
 
 // Reads the configuration from the disk and then sets up the global singleton

@@ -49,6 +49,7 @@ type MotorConfiguration struct {
 type MotorsConfiguration struct {
 	Left          MotorConfiguration `json:"left" yaml:"left"`
 	Right         MotorConfiguration `json:"right" yaml:"right"`
+	Head          MotorConfiguration `json:"head" yaml:"head"`
 	MotorTestTime int                `json:"motor_test_time" yaml:"motor_test_time"`
 }
 

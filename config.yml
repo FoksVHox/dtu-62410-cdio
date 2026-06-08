@@ -9,4 +9,7 @@ mindstorm:
     right:
       address: motor2
       inverted: true
+    head:
+      address: motor2
+      inverted: true
     motor_test_time: 30
