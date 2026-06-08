@@ -1,6 +1,6 @@
 module bot
 
-go 1.26
+go 1.21
 
 require (
 	emperror.dev/errors v0.8.1
@@ -10,6 +10,7 @@ require (
 	github.com/fatih/color v1.19.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/spf13/cobra v1.10.2
+	gocv.io/x/gocv v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
