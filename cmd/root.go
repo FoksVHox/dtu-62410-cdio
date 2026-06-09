@@ -233,7 +233,22 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		}
 
 		time.Sleep(testDuration)
-		log.Info("back motor test complete")
+		log.Info("back motor forward test complete")
+
+		// Test back motor inverted/reverse direction
+		log.Info("starting back motor inverted test")
+		invertedBackSpeed := -backSpeed
+		if err := back.RunTimed(invertedBackSpeed, int(testDuration.Milliseconds())); err != nil {
+			log.WithError(err).Error("failed to start back motor inverted")
+			return
+		}
+
+		time.Sleep(testDuration)
+		log.WithFields(log.Fields{
+			"speed_tps":           invertedBackSpeed,
+			"configured_speed":    motorCfg.Back.Speed,
+			"configured_inverted": motorCfg.Back.Inverted,
+		}).Info("back motor inverted test complete")
 	} else {
 		log.Info("skipping motor tests (enable with --debug)")
 	}
