@@ -11,6 +11,13 @@ import (
 )
 
 // Camera wraps gocv.VideoCapture and provides thread-safe frame grabbing.
+//
+// The camera is mounted in a top-down (overhead) orientation looking straight
+// down at the play field.  Frames are used as-is — no horizontal mirroring is
+// applied.  Coordinate conventions (see detector.go):
+//
+//	X: left edge = -1, right edge = +1
+//	Y: near side of field (top of frame) = -1, far side (bottom) = +1
 type Camera struct {
 	mu  sync.Mutex
 	cap *gocv.VideoCapture
@@ -37,16 +44,19 @@ func OpenCamera() (*Camera, error) {
 	}
 
 	log.WithFields(log.Fields{
-		"device": cfg.CameraDevice,
-		"width":  cfg.CameraWidth,
-		"height": cfg.CameraHeight,
-		"fps":    cfg.CameraFPS,
+		"device":      cfg.CameraDevice,
+		"width":       cfg.CameraWidth,
+		"height":      cfg.CameraHeight,
+		"fps":         cfg.CameraFPS,
+		"orientation": "top-down",
 	}).Info("vision: camera opened")
 
 	return &Camera{cap: cap, dev: cfg.CameraDevice}, nil
 }
 
 // Read grabs the next frame into dst.  Returns an error if the frame is empty.
+// The frame is returned in its natural top-down orientation — no mirroring is
+// performed.
 func (c *Camera) Read(dst *gocv.Mat) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
