@@ -247,15 +247,6 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("speed_tps", headSpeed).Info("head motor running continuously")
 
-	// Run back motor continuously after head motor
-	log.Info("starting continuous back motor operation")
-	backSpeed := int(float64(back.MaxSpeedTPS()) * motorCfg.Back.Speed)
-	if err := back.RunForever(backSpeed); err != nil {
-		log.WithError(err).Error("failed to start back motor for continuous operation")
-		return
-	}
-	log.WithField("speed_tps", backSpeed).Info("back motor running continuously (press CTRL-C to stop)")
-
 	// Wait for interrupt signal
 	<-sigChan
 	log.Info("interrupt signal received, shutting down")
