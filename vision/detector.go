@@ -1,6 +1,12 @@
 // Package vision provides GoCV-based computer vision utilities for the golfbot.
-// It detects ping-pong balls (white/yellow spheres) from a camera feed and
-// returns normalised position data that the navigation layer can consume.
+// It detects ping-pong balls (white/yellow spheres) from a top-down overhead
+// camera feed and returns normalised position data that the navigation layer
+// can consume.
+//
+// Coordinate system (top-down view of the play field):
+//
+//	X: -1 = left edge of frame,  +1 = right edge of frame
+//	Y: -1 = near side of field (top of frame), +1 = far side (bottom of frame)
 package vision
 
 import (
@@ -32,8 +38,12 @@ func (b Ball) NormX(frameWidth int) float64 {
 	return (float64(b.Center.X)/float64(frameWidth))*2.0 - 1.0
 }
 
-// NormY returns the vertical offset normalised to [-1, 1] where 0 is the image
-// midpoint, -1 is the top edge and +1 the bottom edge.
+// NormY returns the depth offset of the ball centre normalised to [-1, 1]
+// from the perspective of the top-down camera:
+//
+//	-1 = near side of the field (top of frame)
+//	 0 = midpoint of the field
+//	+1 = far side of the field (bottom of frame)
 func (b Ball) NormY(frameHeight int) float64 {
 	if frameHeight <= 0 {
 		return 0
