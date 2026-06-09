@@ -47,19 +47,19 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	log.WithField("command", cmd.Name()).Debug("running in debug mode")
 	motorCfg := config.Get().Mindstorm.Motors
 	log.WithFields(log.Fields{
-		"left_address":       motorCfg.Left.Address,
-		"left_driver_name":   motorCfg.Left.DriverName,
-		"left_inverted":      motorCfg.Left.Inverted,
-		"left_speed":         motorCfg.Left.Speed,
-		"right_address":      motorCfg.Right.Address,
-		"right_driver_name":  motorCfg.Right.DriverName,
-		"right_inverted":     motorCfg.Right.Inverted,
-		"right_speed":        motorCfg.Right.Speed,
-		"head_address":       motorCfg.Head.Address,
-		"head_driver_name":   motorCfg.Head.DriverName,
-		"head_inverted":      motorCfg.Head.Inverted,
-		"head_speed":         motorCfg.Head.Speed,
-		"motor_test_time":    motorCfg.MotorTestTime,
+		"left_address":      motorCfg.Left.Address,
+		"left_driver_name":  motorCfg.Left.DriverName,
+		"left_inverted":     motorCfg.Left.Inverted,
+		"left_speed":        motorCfg.Left.Speed,
+		"right_address":     motorCfg.Right.Address,
+		"right_driver_name": motorCfg.Right.DriverName,
+		"right_inverted":    motorCfg.Right.Inverted,
+		"right_speed":       motorCfg.Right.Speed,
+		"head_address":      motorCfg.Head.Address,
+		"head_driver_name":  motorCfg.Head.DriverName,
+		"head_inverted":     motorCfg.Head.Inverted,
+		"head_speed":        motorCfg.Head.Speed,
+		"motor_test_time":   motorCfg.MotorTestTime,
 	}).Debug("loaded motor configuration")
 
 	left, err := mindstorm.NewMotor(mindstorm.MotorConfig{
@@ -190,6 +190,41 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 
 		time.Sleep(testDuration)
 		log.Info("back motor test duration complete")
+
+		// Test 360-degree rotation
+		log.Info("starting 360 degree rotation test")
+
+		rotateThrottle := motorCfg.Left.Speed
+		rotateDuration := motorCfg.MotorTestTime // calibrate this for a full 360
+
+		if err := drive.Turn(rotateThrottle); err != nil {
+			log.WithError(err).Error("failed to start 360 rotation")
+			return
+		}
+
+		time.Sleep(rotateDuration)
+
+		if err := drive.Stop(); err != nil {
+			log.WithError(err).Error("failed to stop after 360 rotation")
+		}
+		log.Info("360 degree rotation test complete")
+
+		// Test driving backwards
+		log.Info("starting backwards drive test")
+
+		backwardThrottle := -motorCfg.Left.Speed
+
+		if err := drive.Drive(backwardThrottle); err != nil {
+			log.WithError(err).Error("failed to start backwards drive")
+			return
+		}
+
+		time.Sleep(testDuration)
+
+		if err := drive.Stop(); err != nil {
+			log.WithError(err).Error("failed to stop backwards drive")
+		}
+		log.Info("backwards drive test complete")
 	} else {
 		log.Info("skipping motor tests (enable with --debug)")
 	}
