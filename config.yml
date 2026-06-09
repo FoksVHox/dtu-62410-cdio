@@ -26,6 +26,31 @@ vision:
   camera_height: 480
   camera_fps: 30
 
+  stream_bind: 0.0.0.0
+  stream_port: 8080
+
+  # Robot marker colours for top-down pose detection.
+  # Suggested setup:
+  #   - blue sticker on robot body center
+  #   - red sticker on robot front
+  robot_body_lower:
+    h: 90
+    s: 80
+    v: 80
+  robot_body_upper:
+    h: 130
+    s: 255
+    v: 255
+
+  robot_front_lower:
+    h: 0
+    s: 120
+    v: 120
+  robot_front_upper:
+    h: 10
+    s: 255
+    v: 255
+
   # Perspective warp — corrects keystoning when the overhead camera is not
   # perfectly orthographic.
   #

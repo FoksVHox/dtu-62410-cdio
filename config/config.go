@@ -140,6 +140,16 @@ type VisionConfiguration struct {
 
 	// DebugVision draws detection circles onto a window when true.
 	DebugVision bool `default:"false" json:"debug_vision" yaml:"debug_vision"`
+
+	// Live vision server settings.
+	StreamBind string `default:"0.0.0.0" json:"stream_bind" yaml:"stream_bind"`
+	StreamPort int    `default:"8080" json:"stream_port" yaml:"stream_port"`
+
+	// Robot marker HSV thresholds for top-down pose detection.
+	RobotBodyLower  HSVBound `json:"robot_body_lower" yaml:"robot_body_lower"`
+	RobotBodyUpper  HSVBound `json:"robot_body_upper" yaml:"robot_body_upper"`
+	RobotFrontLower HSVBound `json:"robot_front_lower" yaml:"robot_front_lower"`
+	RobotFrontUpper HSVBound `json:"robot_front_upper" yaml:"robot_front_upper"`
 }
 
 // NavigationConfiguration holds high-level navigation / state-machine parameters.
@@ -190,9 +200,14 @@ func NewAtPath(path string) (*Configuration, error) {
 	// struct tags because they are nested fields of a non-primitive type.
 	c.Vision.HSVLower = HSVBound{H: 0, S: 0, V: 180}
 	c.Vision.HSVUpper = HSVBound{H: 179, S: 60, V: 255}
+	c.Vision.RobotBodyLower = HSVBound{H: 90, S: 80, V: 80}
+	c.Vision.RobotBodyUpper = HSVBound{H: 130, S: 255, V: 255}
+	c.Vision.RobotFrontLower = HSVBound{H: 0, S: 120, V: 120}
+	c.Vision.RobotFrontUpper = HSVBound{H: 10, S: 255, V: 255}
 	// Track the location where we created this configuration.
 	c.path = path
 	return &c, nil
+
 }
 
 // Set the global configuration instance. This is a blocking operation such that
