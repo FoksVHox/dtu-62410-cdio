@@ -69,14 +69,54 @@ type HSVBound struct {
 	V uint8 `json:"v" yaml:"v"`
 }
 
+// PerspectiveCorner is a single pixel coordinate in the raw camera frame that
+// corresponds to one corner of the play field.
+type PerspectiveCorner struct {
+	X int `json:"x" yaml:"x"`
+	Y int `json:"y" yaml:"y"`
+}
+
+// PerspectiveConfiguration holds the four field-corner coordinates used to
+// compute the perspective-warp homography and the desired output resolution.
+//
+// Corners are specified in the raw (possibly tilted) camera frame and must be
+// provided in this order:
+//
+//	TopLeft, TopRight, BottomRight, BottomLeft
+//
+// When Enabled is false (or no corners are set) the warp step is skipped and
+// raw frames are passed directly to the detector.
+type PerspectiveConfiguration struct {
+	// Enabled must be true for the warp to be applied.  Set to false during
+	// initial testing when the camera is already close to orthographic.
+	Enabled bool `default:"false" json:"enabled" yaml:"enabled"`
+
+	// Corners: four pixel coordinates in the raw frame that map to the four
+	// corners of the rectified output image.
+	TopLeft     PerspectiveCorner `json:"top_left"     yaml:"top_left"`
+	TopRight    PerspectiveCorner `json:"top_right"    yaml:"top_right"`
+	BottomRight PerspectiveCorner `json:"bottom_right" yaml:"bottom_right"`
+	BottomLeft  PerspectiveCorner `json:"bottom_left"  yaml:"bottom_left"`
+
+	// OutputWidth / OutputHeight define the pixel dimensions of the rectified
+	// frame.  Typically equal to CameraWidth / CameraHeight so that the rest
+	// of the pipeline does not change.
+	OutputWidth  int `default:"640" json:"output_width"  yaml:"output_width"`
+	OutputHeight int `default:"480" json:"output_height" yaml:"output_height"`
+}
+
 // VisionConfiguration holds all GoCV / ball-detector parameters.
 type VisionConfiguration struct {
 	// Camera device index passed to OpenVideoCapture (0 = /dev/video0).
 	CameraDevice int `default:"0" json:"camera_device" yaml:"camera_device"`
 	// Capture resolution hints (0 = driver default).
-	CameraWidth  int `default:"640" json:"camera_width" yaml:"camera_width"`
-	CameraHeight int `default:"480" json:"camera_height" yaml:"camera_height"`
-	CameraFPS    float64 `default:"30" json:"camera_fps" yaml:"camera_fps"`
+	CameraWidth  int     `default:"640" json:"camera_width"  yaml:"camera_width"`
+	CameraHeight int     `default:"480" json:"camera_height" yaml:"camera_height"`
+	CameraFPS    float64 `default:"30"  json:"camera_fps"   yaml:"camera_fps"`
+
+	// Perspective warp configuration.  Corrects keystoning from a non-perfectly
+	// orthographic overhead camera mount.
+	Perspective PerspectiveConfiguration `json:"perspective" yaml:"perspective"`
 
 	// HSV colour range for ball detection.
 	// Ping-pong balls are white/light-yellow: low saturation, high value.
@@ -84,12 +124,12 @@ type VisionConfiguration struct {
 	HSVUpper HSVBound `json:"hsv_upper" yaml:"hsv_upper"`
 
 	// Hough circle detection parameters.
-	HoughDP        float64 `default:"1.2" json:"hough_dp" yaml:"hough_dp"`
-	HoughMinDist   float64 `default:"30" json:"hough_min_dist" yaml:"hough_min_dist"`
-	HoughParam1    float64 `default:"100" json:"hough_param1" yaml:"hough_param1"`
-	HoughParam2    float64 `default:"20" json:"hough_param2" yaml:"hough_param2"`
-	HoughMinRadius int     `default:"8" json:"hough_min_radius" yaml:"hough_min_radius"`
-	HoughMaxRadius int     `default:"80" json:"hough_max_radius" yaml:"hough_max_radius"`
+	HoughDP        float64 `default:"1.2" json:"hough_dp"         yaml:"hough_dp"`
+	HoughMinDist   float64 `default:"30"  json:"hough_min_dist"   yaml:"hough_min_dist"`
+	HoughParam1    float64 `default:"100" json:"hough_param1"     yaml:"hough_param1"`
+	HoughParam2    float64 `default:"20"  json:"hough_param2"     yaml:"hough_param2"`
+	HoughMinRadius int     `default:"8"   json:"hough_min_radius" yaml:"hough_min_radius"`
+	HoughMaxRadius int     `default:"80"  json:"hough_max_radius" yaml:"hough_max_radius"`
 
 	// GaussianBlur kernel size (must be odd).
 	BlurKernel int `default:"9" json:"blur_kernel" yaml:"blur_kernel"`
@@ -130,9 +170,9 @@ type Configuration struct {
 	// if the debug flag is passed through the command line arguments.
 	Debug bool
 
-	System     SystemConfiguration     `json:"system" yaml:"system"`
-	Mindstorm  MindstormConfiguration  `json:"mindstorm" yaml:"mindstorm"`
-	Vision     VisionConfiguration     `json:"vision" yaml:"vision"`
+	System     SystemConfiguration     `json:"system"     yaml:"system"`
+	Mindstorm  MindstormConfiguration  `json:"mindstorm"  yaml:"mindstorm"`
+	Vision     VisionConfiguration     `json:"vision"     yaml:"vision"`
 	Navigation NavigationConfiguration `json:"navigation" yaml:"navigation"`
 }
 
