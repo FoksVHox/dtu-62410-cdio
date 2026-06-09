@@ -49,30 +49,68 @@ type Navigator struct {
 	cam      *vision.Camera
 	detector *vision.Detector
 
+	// perspective is non-nil when perspective correction is configured.
+	perspective *vision.PerspectiveTransform
+
 	state        State
 	lastSeen     time.Time
 	collectStart time.Time
 
-	// frameWidth / frameHeight are cached from the camera after the first frame.
+	// frameWidth / frameHeight are cached after the first frame (post-warp).
 	frameWidth  int
 	frameHeight int
 }
 
 // New creates a Navigator.  The collect motor may be nil if there is no separate
 // collector mechanism.
+//
+// If vision.perspective.enabled is true in the global config, the perspective
+// transform is initialised here.  Callers should call Close() on the returned
+// Navigator when done to release resources.
 func New(
 	drive *mindstorm.BeltDrive,
 	collect *mindstorm.Motor,
 	cam *vision.Camera,
 	detector *vision.Detector,
 ) *Navigator {
-	return &Navigator{
+	n := &Navigator{
 		drive:    drive,
 		collect:  collect,
 		cam:      cam,
 		detector: detector,
 		state:    StateSearching,
 		lastSeen: time.Now(),
+	}
+
+	pcfg := config.Get().Vision.Perspective
+	if pcfg.Enabled {
+		corners := [4]vision.PerspectivePoint{
+			{X: pcfg.TopLeft.X, Y: pcfg.TopLeft.Y},
+			{X: pcfg.TopRight.X, Y: pcfg.TopRight.Y},
+			{X: pcfg.BottomRight.X, Y: pcfg.BottomRight.Y},
+			{X: pcfg.BottomLeft.X, Y: pcfg.BottomLeft.Y},
+		}
+		pt, err := vision.NewPerspectiveTransform(corners, pcfg.OutputWidth, pcfg.OutputHeight)
+		if err != nil {
+			log.WithError(err).Warn("navigation: perspective warp disabled — failed to init")
+		} else {
+			n.perspective = pt
+			log.WithFields(log.Fields{
+				"output_width":  pcfg.OutputWidth,
+				"output_height": pcfg.OutputHeight,
+			}).Info("navigation: perspective warp enabled")
+		}
+	}
+
+	return n
+}
+
+// Close releases any resources held by the Navigator (e.g. the perspective
+// homography matrix).
+func (n *Navigator) Close() {
+	if n.perspective != nil {
+		n.perspective.Close()
+		n.perspective = nil
 	}
 }
 
@@ -82,6 +120,10 @@ func New(
 func (n *Navigator) Run(ctx context.Context) error {
 	frame := gocv.NewMat()
 	defer frame.Close()
+
+	// Pre-allocate a warp destination only when perspective correction is active.
+	warped := gocv.NewMat()
+	defer warped.Close()
 
 	cfg := config.Get().Navigation
 	ticker := time.NewTicker(time.Duration(cfg.TickIntervalMs) * time.Millisecond)
@@ -96,7 +138,7 @@ func (n *Navigator) Run(ctx context.Context) error {
 			_ = n.drive.Stop()
 			return ctx.Err()
 		case <-ticker.C:
-			if err := n.tick(&frame); err != nil {
+			if err := n.tick(&frame, &warped); err != nil {
 				log.WithError(err).Error("navigation: tick error")
 			}
 		}
@@ -104,17 +146,33 @@ func (n *Navigator) Run(ctx context.Context) error {
 }
 
 // tick executes one control loop iteration.
-func (n *Navigator) tick(frame *gocv.Mat) error {
-	if err := n.cam.Read(frame); err != nil {
+//
+// rawFrame is filled with the latest camera frame.  When perspective correction
+// is configured, the frame is warped into warpBuf and warpBuf is passed to the
+// detector; otherwise rawFrame is used directly.
+func (n *Navigator) tick(rawFrame, warpBuf *gocv.Mat) error {
+	if err := n.cam.Read(rawFrame); err != nil {
 		return fmt.Errorf("navigation: read frame: %w", err)
 	}
 
-	if n.frameWidth == 0 {
-		n.frameWidth = frame.Cols()
-		n.frameHeight = frame.Rows()
+	// Determine which frame goes to the detector.
+	detectFrame := rawFrame
+	if n.perspective != nil {
+		if err := n.perspective.Warp(*rawFrame, warpBuf); err != nil {
+			// Log but fall back to the raw frame so the robot keeps running.
+			log.WithError(err).Warn("navigation: perspective warp failed, using raw frame")
+		} else {
+			detectFrame = warpBuf
+		}
 	}
 
-	balls, err := n.detector.Detect(*frame)
+	// Cache the working frame dimensions on the first successful frame.
+	if n.frameWidth == 0 {
+		n.frameWidth = detectFrame.Cols()
+		n.frameHeight = detectFrame.Rows()
+	}
+
+	balls, err := n.detector.Detect(*detectFrame)
 	if err != nil {
 		return fmt.Errorf("navigation: detection: %w", err)
 	}

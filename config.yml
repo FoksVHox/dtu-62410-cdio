@@ -25,6 +25,31 @@ vision:
   camera_width: 640
   camera_height: 480
   camera_fps: 30
+
+  # Perspective warp — corrects keystoning when the overhead camera is not
+  # perfectly orthographic.
+  #
+  # How to calibrate:
+  #   1. Capture a single frame from the camera (e.g. with `fswebcam` or the
+  #      debug_vision mode) and open it in an image viewer that shows pixel
+  #      coordinates (GIMP, Fiji, etc.).
+  #   2. Place a physical marker (tape, coloured sticker) at each of the four
+  #      corners of the play field and read off their pixel coordinates.
+  #   3. Fill in the values below in the order: top_left, top_right,
+  #      bottom_right, bottom_left — as seen in the raw camera frame.
+  #   4. Set enabled: true.
+  #
+  # output_width / output_height should match camera_width / camera_height so
+  # that the rest of the pipeline (NormX / NormY) does not change scale.
+  perspective:
+    enabled: false
+    top_left:     { x: 0,   y: 0   }
+    top_right:    { x: 640, y: 0   }
+    bottom_right: { x: 640, y: 480 }
+    bottom_left:  { x: 0,   y: 480 }
+    output_width:  640
+    output_height: 480
+
   # HSV colour range for ball detection (ping-pong balls are white/light-yellow)
   # H: 0-179, S: 0-255, V: 0-255
   hsv_lower:
