@@ -26,7 +26,7 @@ All parameters are read from config.yml (vision and navigation sections).`,
 }
 
 func init() {
-	rootCmd.AddCommand(navigateCmd)
+	rootCommand.AddCommand(navigateCmd)
 }
 
 func runNavigate(_ *cobra.Command, _ []string) error {
