@@ -4,63 +4,46 @@ import (
 	"fmt"
 	"sync"
 
+	"bot/config"
+
 	"github.com/apex/log"
 	gocv "gocv.io/x/gocv"
 )
-
-// CameraConfig holds configuration for opening a video capture source.
-type CameraConfig struct {
-	// DeviceIndex is the index passed to OpenVideoCapture (0 = /dev/video0).
-	DeviceIndex int
-	// Width / Height for the capture resolution (0 = driver default).
-	Width  int
-	Height int
-	// FPS hint for the driver (0 = driver default).
-	FPS float64
-}
-
-// DefaultCameraConfig returns a sensible default for the EV3 / Raspberry Pi camera.
-func DefaultCameraConfig() CameraConfig {
-	return CameraConfig{
-		DeviceIndex: 0,
-		Width:       640,
-		Height:      480,
-		FPS:         30,
-	}
-}
 
 // Camera wraps gocv.VideoCapture and provides thread-safe frame grabbing.
 type Camera struct {
 	mu  sync.Mutex
 	cap *gocv.VideoCapture
-	cfg CameraConfig
+	dev int
 }
 
-// OpenCamera opens the video device described by cfg.
-func OpenCamera(cfg CameraConfig) (*Camera, error) {
-	cap, err := gocv.OpenVideoCapture(cfg.DeviceIndex)
+// OpenCamera opens the video device described by the global config.
+func OpenCamera() (*Camera, error) {
+	cfg := config.Get().Vision
+
+	cap, err := gocv.OpenVideoCapture(cfg.CameraDevice)
 	if err != nil {
-		return nil, fmt.Errorf("vision: open camera %d: %w", cfg.DeviceIndex, err)
+		return nil, fmt.Errorf("vision: open camera %d: %w", cfg.CameraDevice, err)
 	}
 
-	if cfg.Width > 0 {
-		cap.Set(gocv.VideoCaptureFrameWidth, float64(cfg.Width))
+	if cfg.CameraWidth > 0 {
+		cap.Set(gocv.VideoCaptureFrameWidth, float64(cfg.CameraWidth))
 	}
-	if cfg.Height > 0 {
-		cap.Set(gocv.VideoCaptureFrameHeight, float64(cfg.Height))
+	if cfg.CameraHeight > 0 {
+		cap.Set(gocv.VideoCaptureFrameHeight, float64(cfg.CameraHeight))
 	}
-	if cfg.FPS > 0 {
-		cap.Set(gocv.VideoCaptureFPS, cfg.FPS)
+	if cfg.CameraFPS > 0 {
+		cap.Set(gocv.VideoCaptureFPS, cfg.CameraFPS)
 	}
 
 	log.WithFields(log.Fields{
-		"device": cfg.DeviceIndex,
-		"width":  cfg.Width,
-		"height": cfg.Height,
-		"fps":    cfg.FPS,
+		"device": cfg.CameraDevice,
+		"width":  cfg.CameraWidth,
+		"height": cfg.CameraHeight,
+		"fps":    cfg.CameraFPS,
 	}).Info("vision: camera opened")
 
-	return &Camera{cap: cap, cfg: cfg}, nil
+	return &Camera{cap: cap, dev: cfg.CameraDevice}, nil
 }
 
 // Read grabs the next frame into dst.  Returns an error if the frame is empty.
@@ -69,10 +52,10 @@ func (c *Camera) Read(dst *gocv.Mat) error {
 	defer c.mu.Unlock()
 
 	if ok := c.cap.Read(dst); !ok {
-		return fmt.Errorf("vision: failed to read frame from camera %d", c.cfg.DeviceIndex)
+		return fmt.Errorf("vision: failed to read frame from camera %d", c.dev)
 	}
 	if dst.Empty() {
-		return fmt.Errorf("vision: empty frame from camera %d", c.cfg.DeviceIndex)
+		return fmt.Errorf("vision: empty frame from camera %d", c.dev)
 	}
 	return nil
 }

@@ -20,10 +20,33 @@ mindstorm:
       inverted: false
       speed: 0.5
     motor_test_time: 30s
-navigation:
+vision:
   camera_device: 0
   camera_width: 640
   camera_height: 480
+  camera_fps: 30
+  # HSV colour range for ball detection (ping-pong balls are white/light-yellow)
+  # H: 0-179, S: 0-255, V: 0-255
+  hsv_lower:
+    h: 0
+    s: 0
+    v: 180
+  hsv_upper:
+    h: 179
+    s: 60
+    v: 255
+  # Hough circle detection parameters
+  hough_dp: 1.2
+  hough_min_dist: 30
+  hough_param1: 100
+  hough_param2: 20
+  hough_min_radius: 8
+  hough_max_radius: 80
+  blur_kernel: 9
+  # distance = distance_k / apparent_radius — tune on the real robot
+  distance_k: 200
+  debug_vision: false
+navigation:
   drive_speed: 0.35
   turn_speed: 0.25
   steering_gain: 0.6
@@ -31,15 +54,3 @@ navigation:
   collect_dwell_ms: 1200
   search_timeout_ms: 2000
   tick_interval_ms: 50
-  debug_vision: false
-  # HSV colour range for ball detection (ping-pong balls are white/light-yellow)
-  # H: 0-179, S: 0-255, V: 0-255
-  hsv_lower: [0, 0, 180]
-  hsv_upper: [179, 60, 255]
-  # Hough circle parameters
-  hough_dp: 1.2
-  hough_min_dist: 30
-  hough_param1: 100
-  hough_param2: 20
-  hough_min_radius: 8
-  hough_max_radius: 80

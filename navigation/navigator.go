@@ -9,6 +9,7 @@ import (
 	"math"
 	"time"
 
+	"bot/config"
 	"bot/mindstorm"
 	"bot/vision"
 
@@ -41,46 +42,10 @@ func (s State) String() string {
 	}
 }
 
-// Config holds tunable navigation parameters.
-type Config struct {
-	// DriveSpeed is the base forward throttle in [0, 1].
-	DriveSpeed float64
-	// TurnSpeed is the rotation throttle used while searching.
-	TurnSpeed float64
-	// SteeringGain scales the horizontal ball offset into a turn correction.
-	SteeringGain float64
-	// CollectDistanceThreshold: when EstimatedDistance drops below this value
-	// the robot transitions to StateCollecting.
-	CollectDistanceThreshold float64
-	// DistanceK passed to Ball.EstimatedDistance.
-	DistanceK float64
-	// SearchTimeout: after this long without seeing a ball the robot turns.
-	SearchTimeout time.Duration
-	// CollectDwellTime: how long the collector motor runs during pickup.
-	CollectDwellTime time.Duration
-	// TickInterval controls how fast the main loop runs.
-	TickInterval time.Duration
-}
-
-// DefaultConfig returns conservative defaults for a first test.
-func DefaultConfig() Config {
-	return Config{
-		DriveSpeed:               0.35,
-		TurnSpeed:                0.25,
-		SteeringGain:             0.6,
-		CollectDistanceThreshold: 1.5, // tune on real robot
-		DistanceK:                vision.DetectorDefaultDistanceK,
-		SearchTimeout:            2 * time.Second,
-		CollectDwellTime:         1200 * time.Millisecond,
-		TickInterval:             50 * time.Millisecond,
-	}
-}
-
 // Navigator is the top-level controller that ties vision and motor control together.
 type Navigator struct {
-	cfg      Config
 	drive    *mindstorm.BeltDrive
-	collect  *mindstorm.Motor // the back/collector motor
+	collect  *mindstorm.Motor // the back/collector motor (may be nil)
 	cam      *vision.Camera
 	detector *vision.Detector
 
@@ -96,14 +61,12 @@ type Navigator struct {
 // New creates a Navigator.  The collect motor may be nil if there is no separate
 // collector mechanism.
 func New(
-	cfg Config,
 	drive *mindstorm.BeltDrive,
 	collect *mindstorm.Motor,
 	cam *vision.Camera,
 	detector *vision.Detector,
 ) *Navigator {
 	return &Navigator{
-		cfg:      cfg,
 		drive:    drive,
 		collect:  collect,
 		cam:      cam,
@@ -120,7 +83,8 @@ func (n *Navigator) Run(ctx context.Context) error {
 	frame := gocv.NewMat()
 	defer frame.Close()
 
-	ticker := time.NewTicker(n.cfg.TickInterval)
+	cfg := config.Get().Navigation
+	ticker := time.NewTicker(time.Duration(cfg.TickIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
 	log.WithField("state", n.state).Info("navigation: starting loop")
@@ -141,18 +105,15 @@ func (n *Navigator) Run(ctx context.Context) error {
 
 // tick executes one control loop iteration.
 func (n *Navigator) tick(frame *gocv.Mat) error {
-	// Grab frame.
 	if err := n.cam.Read(frame); err != nil {
 		return fmt.Errorf("navigation: read frame: %w", err)
 	}
 
-	// Cache frame dimensions.
 	if n.frameWidth == 0 {
 		n.frameWidth = frame.Cols()
 		n.frameHeight = frame.Rows()
 	}
 
-	// Detect balls.
 	balls, err := n.detector.Detect(*frame)
 	if err != nil {
 		return fmt.Errorf("navigation: detection: %w", err)
@@ -181,26 +142,27 @@ func (n *Navigator) handleSearching(balls []vision.Ball) error {
 		return nil
 	}
 
-	// Keep rotating to scan.
-	return n.drive.Turn(n.cfg.TurnSpeed)
+	cfg := config.Get().Navigation
+	return n.drive.Turn(cfg.TurnSpeed)
 }
 
 // handleApproaching steers the robot toward the closest detected ball.
 func (n *Navigator) handleApproaching(balls []vision.Ball) error {
+	cfg := config.Get().Navigation
+	vcfg := config.Get().Vision
+
 	if len(balls) == 0 {
-		// Lost sight of ball.
-		if time.Since(n.lastSeen) > n.cfg.SearchTimeout {
+		if time.Since(n.lastSeen) > time.Duration(cfg.SearchTimeoutMs)*time.Millisecond {
 			log.Info("navigation: ball lost, returning to searching")
 			n.transitionTo(StateSearching)
 		}
-		// Keep last command active for a moment.
 		return nil
 	}
 
 	n.lastSeen = time.Now()
 	target := balls[0] // largest = closest
 
-	dist := target.EstimatedDistance(n.cfg.DistanceK)
+	dist := target.EstimatedDistance(vcfg.DistanceK)
 
 	log.WithFields(log.Fields{
 		"dist":   fmt.Sprintf("%.2f", dist),
@@ -208,8 +170,7 @@ func (n *Navigator) handleApproaching(balls []vision.Ball) error {
 		"norm_x": fmt.Sprintf("%.3f", target.NormX(n.frameWidth)),
 	}).Debug("navigation: approaching ball")
 
-	// Close enough — collect!
-	if dist <= n.cfg.CollectDistanceThreshold {
+	if dist <= cfg.CollectDistanceThreshold {
 		log.Info("navigation: ball in range, switching to collecting")
 		n.transitionTo(StateCollecting)
 		return nil
@@ -217,25 +178,26 @@ func (n *Navigator) handleApproaching(balls []vision.Ball) error {
 
 	// Proportional steering: offset in [-1,1] multiplied by gain gives turn correction.
 	normX := target.NormX(n.frameWidth)
-	turnCorrection := clamp(normX*n.cfg.SteeringGain, -1, 1)
+	turnCorrection := clamp(normX*cfg.SteeringGain, -1, 1)
 
 	// Scale drive speed down when heavily off-axis to avoid overshooting.
 	speedScale := 1.0 - math.Abs(normX)*0.4
-	throttle := n.cfg.DriveSpeed * speedScale
+	throttle := cfg.DriveSpeed * speedScale
 
 	return n.drive.SetThrottle(throttle, turnCorrection)
 }
 
 // handleCollecting activates the collector motor and waits for the dwell time.
 func (n *Navigator) handleCollecting() error {
+	cfg := config.Get().Navigation
+	dwellDur := time.Duration(cfg.CollectDwellMs) * time.Millisecond
+
 	if n.collectStart.IsZero() {
-		// First tick in this state: stop driving, start collector.
 		if err := n.drive.Stop(); err != nil {
 			return err
 		}
 		if n.collect != nil {
-			// Run collector for the dwell duration.
-			if err := n.collect.RunTimed(600, int(n.cfg.CollectDwellTime.Milliseconds())); err != nil {
+			if err := n.collect.RunTimed(600, cfg.CollectDwellMs); err != nil {
 				log.WithError(err).Warn("navigation: collector motor error")
 			}
 		}
@@ -244,8 +206,7 @@ func (n *Navigator) handleCollecting() error {
 		return nil
 	}
 
-	// Wait until dwell time has elapsed.
-	if time.Since(n.collectStart) >= n.cfg.CollectDwellTime {
+	if time.Since(n.collectStart) >= dwellDur {
 		log.Info("navigation: collection done, returning to searching")
 		n.collectStart = time.Time{}
 		n.transitionTo(StateSearching)

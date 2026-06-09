@@ -62,6 +62,66 @@ type MindstormConfiguration struct {
 	Motors MotorsConfiguration `json:"motors" yaml:"motors"`
 }
 
+// HSVBound holds a single HSV threshold value (H 0-179, S 0-255, V 0-255).
+type HSVBound struct {
+	H uint8 `json:"h" yaml:"h"`
+	S uint8 `json:"s" yaml:"s"`
+	V uint8 `json:"v" yaml:"v"`
+}
+
+// VisionConfiguration holds all GoCV / ball-detector parameters.
+type VisionConfiguration struct {
+	// Camera device index passed to OpenVideoCapture (0 = /dev/video0).
+	CameraDevice int `default:"0" json:"camera_device" yaml:"camera_device"`
+	// Capture resolution hints (0 = driver default).
+	CameraWidth  int `default:"640" json:"camera_width" yaml:"camera_width"`
+	CameraHeight int `default:"480" json:"camera_height" yaml:"camera_height"`
+	CameraFPS    float64 `default:"30" json:"camera_fps" yaml:"camera_fps"`
+
+	// HSV colour range for ball detection.
+	// Ping-pong balls are white/light-yellow: low saturation, high value.
+	HSVLower HSVBound `json:"hsv_lower" yaml:"hsv_lower"`
+	HSVUpper HSVBound `json:"hsv_upper" yaml:"hsv_upper"`
+
+	// Hough circle detection parameters.
+	HoughDP        float64 `default:"1.2" json:"hough_dp" yaml:"hough_dp"`
+	HoughMinDist   float64 `default:"30" json:"hough_min_dist" yaml:"hough_min_dist"`
+	HoughParam1    float64 `default:"100" json:"hough_param1" yaml:"hough_param1"`
+	HoughParam2    float64 `default:"20" json:"hough_param2" yaml:"hough_param2"`
+	HoughMinRadius int     `default:"8" json:"hough_min_radius" yaml:"hough_min_radius"`
+	HoughMaxRadius int     `default:"80" json:"hough_max_radius" yaml:"hough_max_radius"`
+
+	// GaussianBlur kernel size (must be odd).
+	BlurKernel int `default:"9" json:"blur_kernel" yaml:"blur_kernel"`
+
+	// DistanceK is the empirical constant used in: distance = DistanceK / radius.
+	// Increase this value if the robot stops too far from the ball.
+	DistanceK float64 `default:"200" json:"distance_k" yaml:"distance_k"`
+
+	// DebugVision draws detection circles onto a window when true.
+	DebugVision bool `default:"false" json:"debug_vision" yaml:"debug_vision"`
+}
+
+// NavigationConfiguration holds high-level navigation / state-machine parameters.
+type NavigationConfiguration struct {
+	// DriveSpeed is the base forward throttle in [0, 1].
+	DriveSpeed float64 `default:"0.35" json:"drive_speed" yaml:"drive_speed"`
+	// TurnSpeed is the rotation throttle used while searching.
+	TurnSpeed float64 `default:"0.25" json:"turn_speed" yaml:"turn_speed"`
+	// SteeringGain scales the horizontal ball offset into a turn correction.
+	SteeringGain float64 `default:"0.6" json:"steering_gain" yaml:"steering_gain"`
+	// CollectDistanceThreshold: when EstimatedDistance drops below this value
+	// the robot transitions to the collecting state.
+	CollectDistanceThreshold float64 `default:"1.5" json:"collect_distance_threshold" yaml:"collect_distance_threshold"`
+	// CollectDwellMs is how long (milliseconds) the collector motor runs during pickup.
+	CollectDwellMs int `default:"1200" json:"collect_dwell_ms" yaml:"collect_dwell_ms"`
+	// SearchTimeoutMs: after this many milliseconds without seeing a ball the
+	// robot transitions back to searching.
+	SearchTimeoutMs int `default:"2000" json:"search_timeout_ms" yaml:"search_timeout_ms"`
+	// TickIntervalMs controls how fast the main navigation loop runs.
+	TickIntervalMs int `default:"50" json:"tick_interval_ms" yaml:"tick_interval_ms"`
+}
+
 type Configuration struct {
 	// The location from which this configuration instance was instantiated.
 	path string
@@ -70,8 +130,10 @@ type Configuration struct {
 	// if the debug flag is passed through the command line arguments.
 	Debug bool
 
-	System    SystemConfiguration    `json:"system" yaml:"system"`
-	Mindstorm MindstormConfiguration `json:"mindstorm" yaml:"mindstorm"`
+	System     SystemConfiguration     `json:"system" yaml:"system"`
+	Mindstorm  MindstormConfiguration  `json:"mindstorm" yaml:"mindstorm"`
+	Vision     VisionConfiguration     `json:"vision" yaml:"vision"`
+	Navigation NavigationConfiguration `json:"navigation" yaml:"navigation"`
 }
 
 // NewAtPath creates a new struct and set the path where it should be stored.
@@ -84,6 +146,10 @@ func NewAtPath(path string) (*Configuration, error) {
 	if err := defaults.Set(&c); err != nil {
 		return nil, err
 	}
+	// Apply hard-coded HSV defaults that creasty/defaults cannot express as
+	// struct tags because they are nested fields of a non-primitive type.
+	c.Vision.HSVLower = HSVBound{H: 0, S: 0, V: 180}
+	c.Vision.HSVUpper = HSVBound{H: 179, S: 60, V: 255}
 	// Track the location where we created this configuration.
 	c.path = path
 	return &c, nil

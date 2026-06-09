@@ -9,6 +9,8 @@ import (
 	"image/color"
 	"math"
 
+	"bot/config"
+
 	"github.com/apex/log"
 	gocv "gocv.io/x/gocv"
 )
@@ -40,69 +42,19 @@ func (b Ball) NormY(frameHeight int) float64 {
 }
 
 // EstimatedDistance returns a rough relative distance estimate from the apparent
-// radius of the ball.  The constant K is tuned empirically; increase it if the
-// robot stops too far from the ball.
+// radius of the ball using: distance = K / radius.
 func (b Ball) EstimatedDistance(k float64) float64 {
 	if b.Radius <= 0 {
 		return math.MaxFloat64
 	}
 	if k <= 0 {
-		k = DetectorDefaultDistanceK
+		k = config.Get().Vision.DistanceK
 	}
 	return k / b.Radius
 }
 
-// DetectorDefaultDistanceK is the empirical constant used to estimate ball
-// distance from its apparent pixel radius.  Tune this on the real robot.
-const DetectorDefaultDistanceK = 200.0
-
-// DetectorConfig holds tunable parameters for the ball detector.
-type DetectorConfig struct {
-	// HSV lower bound for the ball colour (H 0-179, S 0-255, V 0-255).
-	// Default targets white / light-yellow ping-pong balls.
-	HSVLower color.RGBA
-	// HSV upper bound.
-	HSVUpper color.RGBA
-
-	// Hough circle detection parameters.
-	DP              float64 // inverse ratio of accumulator resolution (1–2)
-	MinDist         float64 // minimum distance between detected centres (px)
-	Param1          float64 // Canny high threshold
-	Param2          float64 // accumulator threshold (lower → more false positives)
-	MinRadius       int     // minimum circle radius to accept
-	MaxRadius       int     // maximum circle radius to accept  (0 = no limit)
-
-	// GaussianBlur kernel size (must be odd).
-	BlurKernel int
-
-	// DistanceK for EstimatedDistance.
-	DistanceK float64
-
-	// Debug draws detection overlay onto a window when true.
-	Debug bool
-}
-
-// DefaultDetectorConfig returns a sensible starting configuration for detecting
-// white / light-yellow ping-pong balls under indoor lighting.
-func DefaultDetectorConfig() DetectorConfig {
-	return DetectorConfig{
-		// White-ish: low saturation, high value
-		HSVLower: color.RGBA{R: 0, G: 0, B: 180, A: 255},  // H, S, V
-		HSVUpper: color.RGBA{R: 179, G: 60, B: 255, A: 255},
-		DP:        1.2,
-		MinDist:   30,
-		Param1:    100,
-		Param2:    20,
-		MinRadius: 8,
-		MaxRadius: 80,
-		BlurKernel: 9,
-		DistanceK: DetectorDefaultDistanceK,
-	}
-}
-
 // Detector wraps the GoCV state required to detect balls in video frames.
 type Detector struct {
-	cfg  DetectorConfig
 	gray gocv.Mat
 	blur gocv.Mat
 	hsv  gocv.Mat
@@ -110,9 +62,8 @@ type Detector struct {
 }
 
 // NewDetector allocates working Mats.  Call Close() when done.
-func NewDetector(cfg DetectorConfig) *Detector {
+func NewDetector() *Detector {
 	return &Detector{
-		cfg:  cfg,
 		gray: gocv.NewMat(),
 		blur: gocv.NewMat(),
 		hsv:  gocv.NewMat(),
@@ -135,20 +86,22 @@ func (d *Detector) Detect(frame gocv.Mat) ([]Ball, error) {
 		return nil, fmt.Errorf("vision: empty frame")
 	}
 
+	cfg := config.Get().Vision
+
 	// Convert to HSV for colour-based masking.
 	gocv.CvtColor(frame, &d.hsv, gocv.ColorBGRToHSV)
 
 	// Build a binary mask from the configured HSV range.
 	low := gocv.NewScalar(
-		float64(d.cfg.HSVLower.R),
-		float64(d.cfg.HSVLower.G),
-		float64(d.cfg.HSVLower.B),
+		float64(cfg.HSVLower.H),
+		float64(cfg.HSVLower.S),
+		float64(cfg.HSVLower.V),
 		0,
 	)
 	high := gocv.NewScalar(
-		float64(d.cfg.HSVUpper.R),
-		float64(d.cfg.HSVUpper.G),
-		float64(d.cfg.HSVUpper.B),
+		float64(cfg.HSVUpper.H),
+		float64(cfg.HSVUpper.S),
+		float64(cfg.HSVUpper.V),
 		0,
 	)
 	gocv.InRangeWithScalar(d.hsv, low, high, &d.mask)
@@ -158,7 +111,7 @@ func (d *Detector) Detect(frame gocv.Mat) ([]Ball, error) {
 	defer maskedBGR.Close()
 	frame.CopyToWithMask(&maskedBGR, d.mask)
 
-	blurKernel := d.cfg.BlurKernel
+	blurKernel := cfg.BlurKernel
 	if blurKernel <= 0 || blurKernel%2 == 0 {
 		blurKernel = 9
 	}
@@ -172,12 +125,12 @@ func (d *Detector) Detect(frame gocv.Mat) ([]Ball, error) {
 		d.gray,
 		&circles,
 		gocv.HoughGradient,
-		d.cfg.DP,
-		d.cfg.MinDist,
-		d.cfg.Param1,
-		d.cfg.Param2,
-		d.cfg.MinRadius,
-		d.cfg.MaxRadius,
+		cfg.HoughDP,
+		cfg.HoughMinDist,
+		cfg.HoughParam1,
+		cfg.HoughParam2,
+		cfg.HoughMinRadius,
+		cfg.HoughMaxRadius,
 	)
 
 	if circles.Empty() {
@@ -198,7 +151,7 @@ func (d *Detector) Detect(frame gocv.Mat) ([]Ball, error) {
 	// Sort: largest radius (closest) first.
 	sortBalls(balls)
 
-	if d.cfg.Debug {
+	if cfg.DebugVision {
 		d.drawDebug(frame, balls)
 	}
 
