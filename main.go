@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	webcam, err := gocv.VideoCaptureDevice(1)
+	webcam, err := gocv.VideoCaptureDevice(0)
 	if err != nil {
 		fmt.Printf("Error opening video capture device: %v\n", err)
 		return
@@ -22,6 +22,9 @@ func main() {
 	// Main window frame matrix
 	img := gocv.NewMat()
 	defer img.Close()
+
+	// Initialize our new dedicated Robot Spotter module!
+	robotSpotter := NewRobotSpotter()
 
 	// Mats for Red tracking (HSV)
 	hsv := gocv.NewMat()
@@ -57,8 +60,11 @@ func main() {
 			fmt.Println("Device closed or failed to read frame")
 			return
 		}
+		robot := robotSpotter.TrackRobot(&img)
 
+		// ==========================================
 		// PART 1: LOCATE ALL RED OBSTACLES & ORANGE
+		// ==========================================
 		gocv.CvtColor(img, &hsv, gocv.ColorBGRToHSV)
 
 		// Red boundaries
@@ -93,12 +99,13 @@ func main() {
 		}
 		redContours.Close()
 
+		// ==========================================
 		// PART 2: LOCATE MULTIPLE BALLS (WHITE & ORANGE)
+		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
 		gocv.Threshold(gray, &thresh, 200, 255, gocv.ThresholdBinary)
 
-		// NEW: Combine the white binary mask and orange binary mask together!
-		// Now 'thresh' contains both the white balls AND the orange ball.
+		// Combine the white binary mask and orange binary mask together!
 		gocv.BitwiseOr(thresh, orangeMask, &thresh)
 
 		// Morphological clean up applies to both colors automatically now
@@ -130,11 +137,13 @@ func main() {
 					ballsTrackedCount++
 
 					centerX := rect.Min.X + (rect.Dx() / 2)
-					centerY := rect.Min.Y + (rect.Dx() / 2)
+					centerY := rect.Min.Y + (rect.Dy() / 2)
 					radius := rect.Dx() / 2
 					ballCenter := image.Pt(centerX, centerY)
 
+					// ==========================================
 					// PART 3: COLLISION/TOUCH DETECTION
+					// ==========================================
 					ballColor := greenColor // Default to safe green
 					frameWidth := img.Cols()
 
@@ -161,8 +170,17 @@ func main() {
 		}
 		ballContours.Close()
 
+		// ==========================================
 		// PART 4: DISPLAY SYSTEM GLOBAL STATUS
+		// ==========================================
 		statusText := fmt.Sprintf("Balls Detected: %d/11", ballsTrackedCount)
+
+		if robot.Detected {
+			statusText += fmt.Sprintf(" | Robot: (%d,%d) Heading: %.0f°", robot.Center.X, robot.Center.Y, robot.Angle)
+		} else {
+			statusText += " | Robot: NOT FOUND"
+		}
+
 		globalColor := greenColor
 		if anyBallInRedZone {
 			statusText += " | Warning: Ball in Red"
