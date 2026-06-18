@@ -26,6 +26,9 @@ func main() {
 	// Initialize our new dedicated Robot Spotter module!
 	robotSpotter := NewRobotSpotter()
 
+	// Navigation logic
+	nav := NewNavigator()
+
 	// Mats for Red tracking (HSV)
 	hsv := gocv.NewMat()
 	defer hsv.Close()
@@ -52,6 +55,7 @@ func main() {
 	blueColor := color.RGBA{255, 0, 0, 0}     // For red zones
 	greenColor := color.RGBA{0, 255, 0, 0}    // Safe ball tracking
 	yellowColor := color.RGBA{0, 255, 255, 0} // Forbidden touch warning
+	cyanColor := color.RGBA{255, 255, 0, 0}   // Navigation arrow
 
 	fmt.Println("System initialized. Tracking red obstacles, white balls, and 1 orange ball simultaneously!")
 
@@ -118,6 +122,9 @@ func main() {
 		ballsTrackedCount := 0
 		anyBallInRedZone := false
 
+		// Collect all detected balls for the navigator
+		var balls []Ball
+
 		for i := 0; i < ballContours.Size(); i++ {
 			// Stop looking if we already hit our 11 ball maximum target
 			if ballsTrackedCount >= 11 {
@@ -146,6 +153,7 @@ func main() {
 					// ==========================================
 					ballColor := greenColor // Default to safe green
 					frameWidth := img.Cols()
+					inRed := false
 
 					// Check if this specific ball falls inside any red zone
 					for _, zone := range redZones {
@@ -155,9 +163,12 @@ func main() {
 						if ballCenter.In(zone) {
 							ballColor = yellowColor // Change tracking circle to yellow inside localized red zones
 							anyBallInRedZone = true
+							inRed = true
 							break
 						}
 					}
+
+					balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed})
 
 					// Draw the individual tracking circle and tracking dot for THIS ball
 					gocv.Circle(&img, ballCenter, radius, ballColor, 3)
@@ -171,7 +182,27 @@ func main() {
 		ballContours.Close()
 
 		// ==========================================
-		// PART 4: DISPLAY SYSTEM GLOBAL STATUS
+		// PART 4: NAVIGATION
+		// ==========================================
+		target := PickNextBall(robot, balls)
+		var cmd DriveCommand
+		if target != nil {
+			var navErr error
+			cmd, navErr = nav.NextCommand(robot, *target)
+			if navErr == nil && !cmd.Arrived {
+				// Draw navigation arrow from robot toward target
+				arrowTip := image.Pt(
+					robot.Center.X+int(cmd.Throttle*40),
+					robot.Center.Y,
+				)
+				start, end := ArrowPoints(robot.Center, target.Center, 60)
+				gocv.Line(&img, start, end, cyanColor, 2)
+				_ = arrowTip // available if you want to draw throttle vector later
+			}
+		}
+
+		// ==========================================
+		// PART 5: DISPLAY SYSTEM GLOBAL STATUS
 		// ==========================================
 		statusText := fmt.Sprintf("Balls Detected: %d/11", ballsTrackedCount)
 
@@ -187,9 +218,12 @@ func main() {
 			globalColor = yellowColor
 		}
 
+		// Navigation debug line
+		navText := DebugNavigation(robot, target, cmd)
+
 		// Draw real-time global tracking diagnostics text onto the frame
-		textOrigin := image.Pt(20, 40)
-		gocv.PutText(&img, statusText, textOrigin, gocv.FontHersheySimplex, 0.7, globalColor, 2)
+		gocv.PutText(&img, statusText, image.Pt(20, 40), gocv.FontHersheySimplex, 0.7, globalColor, 2)
+		gocv.PutText(&img, navText, image.Pt(20, 70), gocv.FontHersheySimplex, 0.6, cyanColor, 2)
 
 		// Show the master combined tracking view
 		window.IMShow(img)
