@@ -8,104 +8,99 @@ import (
 	"gocv.io/x/gocv"
 )
 
-// RobotState holds the detected position and heading of the robot in pixel space.
+// RobotState holds everything the navigator needs to know about the robot.
 type RobotState struct {
 	Detected bool
 	Center   image.Point
-	// Angle is the heading in degrees, measured clockwise from the positive X axis (right).
-	// 0° = facing right, 90° = facing down, 180° = facing left, 270° = facing up.
-	Angle float64
+	Angle    float64 // Facing direction in degrees (0 to 360)
 }
 
-// RobotSpotter detects the robot from a top-down camera image.
-// The robot must have a large RED marker for its body center and a smaller BLUE marker
-// offset forward so the heading can be computed.
+// RobotSpotter manages the ArUco tracking state.
 type RobotSpotter struct {
-	// Nothing stateful yet, but kept as struct so future filtering (e.g. Kalman) can be added.
+	detector    gocv.ArucoDetector
+	purpleColor color.RGBA
 }
 
-// NewRobotSpotter creates a new RobotSpotter.
+// NewRobotSpotter initializes the ArUco tracking configuration.
 func NewRobotSpotter() *RobotSpotter {
-	return &RobotSpotter{}
+	dict := gocv.GetPredefinedDictionary(gocv.ArucoDict4x4_250)
+	params := gocv.NewArucoDetectorParameters()
+
+	return &RobotSpotter{
+		detector:    gocv.NewArucoDetectorWithParams(dict, params),
+		purpleColor: color.RGBA{255, 0, 255, 0},
+	}
 }
 
-// TrackRobot analyses the current frame and returns the robot state.
-// It expects a BGR image. The function draws debug overlays onto the frame.
+// TrackRobot scans the frame for ArUco markers and returns position/heading.
 func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
-	hsv := gocv.NewMat()
-	defer hsv.Close()
-	gocv.CvtColor(*frame, &hsv, gocv.ColorBGRToHSV)
+	var robot RobotState
 
-	// ---- detect large RED body marker ----
-	mask1 := gocv.NewMat()
-	defer mask1.Close()
-	mask2 := gocv.NewMat()
-	defer mask2.Close()
-	redMask := gocv.NewMat()
-	defer redMask.Close()
+	corners, ids, rejected := rs.detector.DetectMarkers(*frame)
 
-	gocv.InRangeWithScalar(hsv, gocv.NewScalar(0, 120, 120, 0), gocv.NewScalar(10, 255, 255, 0), &mask1)
-	gocv.InRangeWithScalar(hsv, gocv.NewScalar(170, 120, 120, 0), gocv.NewScalar(180, 255, 255, 0), &mask2)
-	gocv.BitwiseOr(mask1, mask2, &redMask)
-
-	body, bodyOK := largestContourCenter(redMask, 300)
-
-	// ---- detect small BLUE heading marker ----
-	blueMask := gocv.NewMat()
-	defer blueMask.Close()
-	gocv.InRangeWithScalar(hsv, gocv.NewScalar(100, 150, 100, 0), gocv.NewScalar(130, 255, 255, 0), &blueMask)
-
-	heading, headingOK := largestContourCenter(blueMask, 50)
-
-	if !bodyOK {
-		return RobotState{Detected: false}
-	}
-
-	angle := 0.0
-	if headingOK {
-		dx := float64(heading.X - body.X)
-		dy := float64(heading.Y - body.Y)
-		// atan2 gives angle from positive X axis; Y increases downward in image coords.
-		angle = math.Atan2(dy, dx) * 180.0 / math.Pi
-		if angle < 0 {
-			angle += 360
+	// Draw red boxes around rejected candidates for debugging.
+	for _, rej := range rejected {
+		if len(rej) == 4 {
+			for j := 0; j < 4; j++ {
+				pt1 := image.Pt(int(rej[j].X), int(rej[j].Y))
+				pt2 := image.Pt(int(rej[(j+1)%4].X), int(rej[(j+1)%4].Y))
+				gocv.Line(frame, pt1, pt2, color.RGBA{255, 0, 0, 0}, 2)
+			}
 		}
 	}
 
-	// Draw overlays.
-	redDot := color.RGBA{0, 0, 255, 0} // BGR red
-	blueDot := color.RGBA{255, 0, 0, 0} // BGR blue
-	gocv.Circle(frame, body, 8, redDot, -1)
-	if headingOK {
-		gocv.Circle(frame, heading, 5, blueDot, -1)
-		gocv.Line(frame, body, heading, blueDot, 2)
+	if len(ids) == 0 {
+		return robot
 	}
 
-	return RobotState{
-		Detected: true,
-		Center:   body,
-		Angle:    angle,
-	}
-}
+	robot.Detected = true
 
-// largestContourCenter returns the centroid of the largest contour in mask that
-// exceeds minArea pixels. Returns false if none found.
-func largestContourCenter(mask gocv.Mat, minArea float64) (image.Point, bool) {
-	contours := gocv.FindContours(mask, gocv.RetrievalExternal, gocv.ChainApproxSimple)
-	defer contours.Close()
+	// Use the first detected marker.
+	markerCorners := corners[0]
+	if len(markerCorners) < 4 {
+		return robot
+	}
 
-	bestArea := 0.0
-	bestIdx := -1
-	for i := 0; i < contours.Size(); i++ {
-		a := gocv.ContourArea(contours.At(i))
-		if a > bestArea {
-			bestArea = a
-			bestIdx = i
-		}
+	// Center of marker.
+	var sumX, sumY float32
+	for _, pt := range markerCorners {
+		sumX += float32(pt.X)
+		sumY += float32(pt.Y)
 	}
-	if bestIdx < 0 || bestArea < minArea {
-		return image.Point{}, false
+	robot.Center = image.Pt(int(sumX/4), int(sumY/4))
+
+	// Heading from corner 3 -> corner 0.
+	pFront := markerCorners[0]
+	pBack := markerCorners[3]
+
+	deltaX := float64(pFront.X - pBack.X)
+	deltaY := float64(pFront.Y - pBack.Y)
+
+	radians := math.Atan2(deltaY, deltaX)
+	degrees := radians * (180.0 / math.Pi)
+	if degrees < 0 {
+		degrees += 360
 	}
-	r := gocv.BoundingRect(contours.At(bestIdx))
-	return image.Pt(r.Min.X+r.Dx()/2, r.Min.Y+r.Dy()/2), true
+	robot.Angle = degrees
+
+	// Purple marker outline.
+	for j := 0; j < 4; j++ {
+		p1 := markerCorners[j]
+		p2 := markerCorners[(j+1)%4]
+
+		pt1 := image.Pt(int(p1.X), int(p1.Y))
+		pt2 := image.Pt(int(p2.X), int(p2.Y))
+
+		gocv.Line(frame, pt1, pt2, rs.purpleColor, 3)
+	}
+
+	// Heading arrow.
+	arrowLength := 40.0
+	targetX := float64(robot.Center.X) + arrowLength*math.Cos(radians)
+	targetY := float64(robot.Center.Y) + arrowLength*math.Sin(radians)
+	arrowTarget := image.Pt(int(targetX), int(targetY))
+
+	gocv.ArrowedLine(frame, robot.Center, arrowTarget, rs.purpleColor, 3)
+
+	return robot
 }
