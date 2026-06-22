@@ -79,13 +79,20 @@ func (n *Navigator) NextCommand(robot RobotState, target Ball) (DriveCommand, er
 
 	// --- 4. Build command ---
 	if math.Abs(headingErr) > n.TurnThreshold {
-		// Turn in place toward the target.
-		turnDir := math.Copysign(n.TurnSpeed, headingErr)
+		// Turn in place toward the target. Scale magnitude with the error so we
+		// spin quickly when badly misaligned and gently when nearly aligned.
+		mag := n.TurnSpeed
+		if a := math.Abs(headingErr); a < 45 {
+			// Ramp down below 45° but keep a minimum so we don't stall.
+			mag = math.Max(n.TurnSpeed*(a/45.0), 0.2)
+		}
+		turnDir := math.Copysign(mag, headingErr)
 		return DriveCommand{Throttle: 0, Turn: turnDir}, nil
 	}
 
-	// Aligned enough — drive forward (with a small proportional correction).
-	correction := (headingErr / 180.0) * n.TurnSpeed
+	// Aligned enough — drive forward with a proportional steering correction.
+	correction := (headingErr / n.TurnThreshold) * n.TurnSpeed
+	correction = math.Max(-n.TurnSpeed, math.Min(n.TurnSpeed, correction))
 	return DriveCommand{Throttle: n.DriveSpeed, Turn: correction}, nil
 }
 

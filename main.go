@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"os"
 
 	"gocv.io/x/gocv"
 )
@@ -27,7 +28,7 @@ func main() {
 	robotSpotter := NewRobotSpotter()
 
 	// Navigation logic
-	nav := NewNavigator()
+	//nav := NewNavigator()
 
 	// Mats for Red tracking (HSV)
 	hsv := gocv.NewMat()
@@ -184,21 +185,32 @@ func main() {
 		// ==========================================
 		// PART 4: NAVIGATION
 		// ==========================================
+		nav := NewNavigator()
+
+		// Link to the physical robot. Set ROBOT_ADDR to the EV3's "ip:port"
+		// (e.g. "192.168.1.50:9000"). Leave empty to run in simulation mode.
+		robotLink := NewRobotLink(os.Getenv("ROBOT_ADDR"))
+		defer robotLink.Close()
 		target := PickNextBall(robot, balls)
 		var cmd DriveCommand
 		if target != nil {
 			var navErr error
 			cmd, navErr = nav.NextCommand(robot, *target)
-			if navErr == nil && !cmd.Arrived {
-				// Draw navigation arrow from robot toward target
-				arrowTip := image.Pt(
-					robot.Center.X+int(cmd.Throttle*40),
-					robot.Center.Y,
-				)
-				start, end := ArrowPoints(robot.Center, target.Center, 60)
-				gocv.Line(&img, start, end, cyanColor, 2)
-				_ = arrowTip // available if you want to draw throttle vector later
+			if navErr == nil {
+				// Actually drive the robot toward the ball.
+				robotLink.Send(cmd)
+
+				if !cmd.Arrived {
+					// Draw navigation arrow from robot toward target
+					start, end := ArrowPoints(robot.Center, target.Center, 60)
+					gocv.Line(&img, start, end, cyanColor, 2)
+				}
+			} else {
+				robotLink.Stop()
 			}
+		} else {
+			// No reachable ball (or robot not detected) — make sure we don't keep moving.
+			robotLink.Stop()
 		}
 
 		// ==========================================
