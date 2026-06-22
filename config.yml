@@ -2,6 +2,8 @@ system:
   root_directory: .
   log_directory: ./logs
 mindstorm:
+  ev3:
+    listen_address: ":9000"
   motors:
     left:
       address: motor0

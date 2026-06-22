@@ -37,6 +37,10 @@ type EV3Configuration struct {
 
 	// Default stop action when stopping motors (coast, brake, hold).
 	DefaultStopAction string `default:"brake" json:"default_stop_action" yaml:"default_stop_action"`
+
+	// ListenAddress is the TCP address the robot listens on for drive commands
+	// streamed from the PC (vision program). Format: "host:port" or ":port".
+	ListenAddress string `default:":9000" json:"listen_address" yaml:"listen_address"`
 }
 
 // MotorConfiguration defines how a single motor should be discovered and controlled.
