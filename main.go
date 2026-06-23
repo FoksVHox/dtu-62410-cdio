@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	webcam, err := gocv.VideoCaptureDevice(0)
+	webcam, err := gocv.VideoCaptureDevice(4)
 	if err != nil {
 		fmt.Printf("Error opening video capture device: %v\n", err)
 		return
@@ -110,7 +110,7 @@ func main() {
 		// PART 2: LOCATE MULTIPLE BALLS (WHITE & ORANGE)
 		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
-		gocv.Threshold(gray, &thresh, 200, 255, gocv.ThresholdBinary)
+		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
 
 		// Combine the white binary mask and orange binary mask together!
 		gocv.BitwiseOr(thresh, orangeMask, &thresh)
@@ -142,7 +142,7 @@ func main() {
 				rect := gocv.BoundingRect(contour)
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
-				if aspectRatio > 0.7 && aspectRatio < 1.3 {
+				if aspectRatio > 0.5 && aspectRatio < 1.5 {
 					// Increment our ball tally
 					ballsTrackedCount++
 
