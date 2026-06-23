@@ -8,34 +8,33 @@ import (
 	"gocv.io/x/gocv"
 )
 
-// RobotData holds everything we need to know about our LEGO picker
-type RobotData struct {
+// RobotState holds everything the navigator needs to know about the robot.
+type RobotState struct {
 	Detected bool
 	Center   image.Point
 	Angle    float64 // Facing direction in degrees (0 to 360)
 }
 
-// RobotSpotter manages the ArUco tracking states
+// RobotSpotter manages the ArUco tracking state.
 type RobotSpotter struct {
 	detector    gocv.ArucoDetector
 	purpleColor color.RGBA
 }
 
-// NewRobotSpotter initializes our robot tracking configuration
+// NewRobotSpotter initializes the ArUco tracking configuration
 func NewRobotSpotter() *RobotSpotter {
-	// TEMPORARY TEST: Look for ANY 4x4 marker from the massive 250-count index
 	dict := gocv.GetPredefinedDictionary(gocv.ArucoDict4x4_250)
 	params := gocv.NewArucoDetectorParameters()
 
 	return &RobotSpotter{
 		detector:    gocv.NewArucoDetectorWithParams(dict, params),
-		purpleColor: color.RGBA{255, 0, 255, 0}, // Regal purple
+		purpleColor: color.RGBA{255, 0, 255, 0},
 	}
 }
 
-// TrackRobot scans the frame for ArUco markers and returns position/heading
-func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
-	var robot RobotData
+// TrackRobot scans the frame for ArUco markers and returns position/heading.
+func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
+	var robot RobotState
 
 	// Detect markers, but this time we capture the 'rejected' list too!
 	corners, ids, rejected := rs.detector.DetectMarkers(*frame)
@@ -52,7 +51,6 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 			}
 		}
 	}
-	// ==========================================
 
 	// NEW: Find if Marker ID 1 is anywhere in the detected list
 	targetIndex := -1
@@ -76,7 +74,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 		return robot
 	}
 
-	// 1. Calculate Center of the marker
+	// Center of marker.
 	var sumX, sumY float32
 	for _, pt := range markerCorners {
 		sumX += float32(pt.X)
@@ -84,7 +82,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 	}
 	robot.Center = image.Pt(int(sumX/4), int(sumY/4))
 
-	// 2. Calculate Heading Angle
+	// Heading from corner 3 -> corner 0.
 	pFront := markerCorners[0]
 	pBack := markerCorners[3]
 
@@ -99,7 +97,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 	}
 	robot.Angle = degrees
 
-	// 3. Visuals: Draw the purple bounding frame
+	// Purple marker outline.
 	for j := 0; j < 4; j++ {
 		p1 := markerCorners[j]
 		p2 := markerCorners[(j+1)%4]
@@ -110,6 +108,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 		gocv.Line(frame, pt1, pt2, rs.purpleColor, 3)
 	}
 
+	// Heading arrow.
 	arrowLength := 40.0
 	targetX := float64(robot.Center.X) + arrowLength*math.Cos(radians)
 	targetY := float64(robot.Center.Y) + arrowLength*math.Sin(radians)
