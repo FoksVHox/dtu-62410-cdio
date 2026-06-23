@@ -54,14 +54,23 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotData {
 	}
 	// ==========================================
 
-	if len(ids) == 0 {
-		return robot // Return empty data if robot isn't in frame
+	// NEW: Find if Marker ID 1 is anywhere in the detected list
+	targetIndex := -1
+	for idx, id := range ids {
+		if id == 0 {
+			targetIndex = idx
+			break
+		}
+	}
+
+	// If Marker ID 1 wasn't found, exit early!
+	if targetIndex == -1 {
+		return robot
 	}
 
 	robot.Detected = true
-
-	// Grab the 4 corner points of the first detected marker (index 0).
-	markerCorners := corners[0]
+	// Grab the corners of ONLY Marker ID 1
+	markerCorners := corners[targetIndex]
 
 	if len(markerCorners) < 4 {
 		return robot

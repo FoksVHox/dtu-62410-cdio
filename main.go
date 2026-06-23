@@ -25,6 +25,7 @@ func main() {
 
 	// Initialize our new dedicated Robot Spotter module!
 	robotSpotter := NewRobotSpotter()
+	goalSpotter := NewGoalSpotter()
 
 	// Mats for Red tracking (HSV)
 	hsv := gocv.NewMat()
@@ -61,6 +62,7 @@ func main() {
 			return
 		}
 		robot := robotSpotter.TrackRobot(&img)
+		goal := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
 		// PART 1: LOCATE ALL RED OBSTACLES & ORANGE
@@ -179,6 +181,11 @@ func main() {
 			statusText += fmt.Sprintf(" | Robot: (%d,%d) Heading: %.0f°", robot.Center.X, robot.Center.Y, robot.Angle)
 		} else {
 			statusText += " | Robot: NOT FOUND"
+		}
+		if goal.Detected {
+			statusText += fmt.Sprintf(" | Goal: (%d,%d)", goal.Center.X, goal.Center.Y)
+		} else {
+			statusText += " | Goal: NOT FOUND"
 		}
 
 		globalColor := greenColor
