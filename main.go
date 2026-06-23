@@ -27,6 +27,10 @@ func main() {
 	// Initialize our new dedicated Robot Spotter module!
 	robotSpotter := NewRobotSpotter()
 	goalSpotter := NewGoalSpotter()
+	nav := NewNavigator()
+	// Connect to the physical robot
+	robotLink := NewRobotLink(os.Getenv("ROBOT_ADDR"))
+	defer robotLink.Close()
 
 	// Navigation logic
 	//nav := NewNavigator()
@@ -187,12 +191,8 @@ func main() {
 		// ==========================================
 		// PART 4: NAVIGATION
 		// ==========================================
-		nav := NewNavigator()
 
 		// Link to the physical robot. Set ROBOT_ADDR to the EV3's "ip:port"
-		// (e.g. "192.168.1.50:9000"). Leave empty to run in simulation mode.
-		robotLink := NewRobotLink(os.Getenv("ROBOT_ADDR"))
-		defer robotLink.Close()
 		target := PickNextBall(robot, balls)
 		var cmd DriveCommand
 		if target != nil {
