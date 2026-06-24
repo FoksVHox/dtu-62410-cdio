@@ -12,7 +12,7 @@ import (
 type RobotState struct {
 	Detected bool
 	Center   image.Point
-	Angle    float64        // Facing direction in degrees (0 to 360)
+	Angle    float64         // Facing direction in degrees (0 to 360)
 	Box      image.Rectangle // Bounding rectangle of the ArUco marker (used to exclude false-positive ball detections inside the purple square)
 }
 
@@ -48,7 +48,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
 			for j := 0; j < 4; j++ {
 				pt1 := image.Pt(int(rej[j].X), int(rej[j].Y))
 				pt2 := image.Pt(int(rej[(j+1)%4].X), int(rej[(j+1)%4].Y))
-				gocv.Line(frame, pt1, pt2, color.RGBA{255, 0, 0, 0}, 2) // Draw Red lines
+				gocv.Line(frame, pt1, pt2, color.RGBA{255, 0, 0, 0}, 1) // Draw Red lines
 			}
 		}
 	}
@@ -124,7 +124,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
 		pt1 := image.Pt(int(p1.X), int(p1.Y))
 		pt2 := image.Pt(int(p2.X), int(p2.Y))
 
-		gocv.Line(frame, pt1, pt2, rs.purpleColor, 3)
+		gocv.Line(frame, pt1, pt2, rs.purpleColor, 1)
 	}
 
 	// Heading arrow.
@@ -133,7 +133,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
 	targetY := float64(robot.Center.Y) + arrowLength*math.Sin(radians)
 	arrowTarget := image.Pt(int(targetX), int(targetY))
 
-	gocv.ArrowedLine(frame, robot.Center, arrowTarget, rs.purpleColor, 3)
+	gocv.ArrowedLine(frame, robot.Center, arrowTarget, rs.purpleColor, 1)
 
 	return robot
 }

@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"os"
 
 	"gocv.io/x/gocv"
 )
 
 func main() {
-	webcam, err := gocv.VideoCaptureDevice(4)
+	webcam, err := gocv.VideoCaptureDevice(1)
 	if err != nil {
 		fmt.Printf("Error opening video capture device: %v\n", err)
 		return
@@ -26,7 +25,7 @@ func main() {
 	robotSpotter := NewRobotSpotter()
 	goalSpotter := NewGoalSpotter()
 	nav := NewNavigator()
-	robotLink := NewRobotLink(os.Getenv("ROBOT_ADDR"))
+	robotLink := NewRobotLink("169.254.201.177:9000")
 	defer robotLink.Close()
 
 	// Collection FSM — tracks phase, ball count and VIP orange status.
@@ -53,11 +52,11 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor := color.RGBA{255, 0, 0, 0}     // Red-zone boxes
-	greenColor := color.RGBA{0, 255, 0, 0}    // Safe ball tracking
-	yellowColor := color.RGBA{0, 255, 255, 0} // Ball-in-red-zone warning
-	cyanColor := color.RGBA{255, 255, 0, 0}   // Navigation arrow
-	orangeColor := color.RGBA{0, 165, 255, 0} // VIP orange ball highlight
+	blueColor := color.RGBA{255, 0, 0, 0}      // Red-zone boxes
+	greenColor := color.RGBA{0, 255, 0, 0}     // Safe ball tracking
+	yellowColor := color.RGBA{0, 255, 255, 0}  // Ball-in-red-zone warning
+	cyanColor := color.RGBA{255, 255, 0, 0}    // Navigation arrow
+	orangeColor := color.RGBA{0, 165, 255, 0}  // VIP orange ball highlight
 	magentaColor := color.RGBA{255, 0, 255, 0} // Deliver-to-goal arrow
 
 	fmt.Println("System initialised. Running collection FSM.")
@@ -97,7 +96,7 @@ func main() {
 			if gocv.ContourArea(contour) > 400 {
 				rect := gocv.BoundingRect(contour)
 				redZones = append(redZones, rect)
-				gocv.Rectangle(&img, rect, blueColor, 2)
+				gocv.Rectangle(&img, rect, blueColor, 1)
 			}
 		}
 		redContours.Close()
@@ -183,7 +182,7 @@ func main() {
 					} else if isOrange {
 						drawColor = orangeColor
 					}
-					gocv.Circle(&img, ballCenter, radius, drawColor, 3)
+					gocv.Circle(&img, ballCenter, radius, drawColor, 1)
 					gocv.Circle(&img, ballCenter, 4, drawColor, -1)
 
 					fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
@@ -286,7 +285,7 @@ func main() {
 				robotLink.Send(cmd)
 				// Draw navigation arrow (magenta) toward the goal.
 				start, end := ArrowPoints(robot.Center, goal.Center, 60)
-				gocv.Line(&img, start, end, magentaColor, 2)
+				gocv.Line(&img, start, end, magentaColor, 1)
 			}
 
 		case PhaseDone:
@@ -328,8 +327,8 @@ func main() {
 
 		navText := DebugNavigation(robot, navTarget, cmd)
 
-		gocv.PutText(&img, statusText, image.Pt(20, 40), gocv.FontHersheySimplex, 0.6, globalColor, 2)
-		gocv.PutText(&img, navText, image.Pt(20, 70), gocv.FontHersheySimplex, 0.55, cyanColor, 2)
+		gocv.PutText(&img, statusText, image.Pt(20, 40), gocv.FontHersheySimplex, 0.6, globalColor, 1)
+		gocv.PutText(&img, navText, image.Pt(20, 70), gocv.FontHersheySimplex, 0.55, cyanColor, 1)
 
 		window.IMShow(img)
 		if window.WaitKey(1) >= 0 {
