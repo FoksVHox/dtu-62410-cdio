@@ -142,6 +142,41 @@ func (rl *RobotLink) Send(cmd DriveCommand) {
 	}
 }
 
+// ForceThrottle bypasses the smoothing ramp and sends the requested throttle
+// value immediately at full strength, with turn=0. This is used during the
+// phantom latch burst where we need the robot moving forward right away rather
+// than spending several frames ramping up from 0.
+func (rl *RobotLink) ForceThrottle(throttle float64) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(rl.lastSend) < rl.minPause {
+		fmt.Printf("[RobotLink] PHANTOM SKIP (rate-limited) thr=%.3f\n", throttle)
+		return
+	}
+	rl.lastSend = now
+
+	// Write curThr directly — bypass approach() so the ramp is skipped.
+	rl.curThr = clamp(throttle, -1, 1)
+	rl.curTurn = 0
+
+	line := fmt.Sprintf("%.3f 0.000\n", rl.curThr)
+
+	fmt.Printf("[RobotLink:PHANTOM] t=%s | FORCE thr=%.3f turn=0.000\n",
+		now.Format("15:04:05.000"), rl.curThr)
+
+	if !rl.enabled || rl.conn == nil {
+		fmt.Printf("[RobotLink:SIM] %s", line)
+		return
+	}
+
+	if _, err := rl.conn.Write([]byte(line)); err != nil {
+		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
+		rl.reconnectAsync()
+	}
+}
+
 // Stop tells the robot to halt and resets the smoothing state.
 func (rl *RobotLink) Stop() {
 	rl.mu.Lock()
