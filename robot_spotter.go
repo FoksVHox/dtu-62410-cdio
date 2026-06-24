@@ -114,7 +114,7 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
 	if degrees < 0 {
 		degrees += 360
 	}
-	degrees = math.Mod(degrees+180.0, 360.0) //new shit that might not work
+
 	robot.Angle = degrees
 
 	// Purple marker outline.
