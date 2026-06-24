@@ -303,16 +303,35 @@ func main() {
 			// ---- PHANTOM LATCH CHECK ----
 			if phantomActive {
 				if now.After(phantomUntil) {
-					fmt.Printf("[FSM] Phantom latch expired. Ball collected (orange=%v). Delivering to goal.\n", phantomOrange)
+					// One ball has entered the harvester.
+					state.BallsInHarvester++
+					fmt.Printf("[FSM] Phantom latch expired. Ball in harvester (orange=%v). Harvester: %d/%d balls.\n",
+						phantomOrange, state.BallsInHarvester, state.MaxHarvesterLoad)
 					if phantomOrange {
 						state.CarryingOrange = true
 					}
 					phantomActive = false
 					lockedTarget = nil // release lock so next ball is chosen fresh
 					robotLink.Stop()
-					state.DelivSubPhase = DelivSubTurn180 // reset delivery sub-FSM
-					nav = NewNavigator()                  // fresh navigator for delivery
-					state.Phase = PhaseDeliverGoal
+
+					// Decide whether to keep collecting or go deliver.
+					// Trigger delivery if:
+					//  (a) harvester is full (reached MaxHarvesterLoad), OR
+					//  (b) no more balls remain on the field (all collected), OR
+					//  (c) this was the last ball needed to finish the run.
+					remainingOnField := state.TotalBalls - state.BallsCollected - state.BallsInHarvester
+					shoulDeliver := state.BallsInHarvester >= state.MaxHarvesterLoad ||
+						remainingOnField <= 0
+					if shouldDeliver {
+						fmt.Printf("[FSM] Harvester full or no balls left — delivering %d ball(s) to goal.\n",
+							state.BallsInHarvester)
+						state.DelivSubPhase = DelivSubTurn180
+						nav = NewNavigator()
+						state.Phase = PhaseDeliverGoal
+					} else {
+						// Keep picking — reset navigator for the next ball.
+						nav = NewNavigator()
+					}
 					break
 				}
 				robotLink.ForceThrottle(phantomThrottle)
@@ -360,7 +379,16 @@ func main() {
 			navTarget = lockedTarget
 
 			if navTarget == nil {
-				robotLink.Stop()
+				// No balls visible. If we're already holding some, go deliver them.
+				if state.BallsInHarvester > 0 {
+					fmt.Printf("[FSM] No balls visible with %d in harvester — delivering.\n",
+						state.BallsInHarvester)
+					state.DelivSubPhase = DelivSubTurn180
+					nav = NewNavigator()
+					state.Phase = PhaseDeliverGoal
+				} else {
+					robotLink.Stop()
+				}
 				break
 			}
 
@@ -480,18 +508,20 @@ func main() {
 
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
-			// ── Step 3: Send LATCH_OPEN to EV3, start 8-second timer ─────────────
+			// ── Step 3: Send LATCH_OPEN to EV3, start timer ──────────────────────
 			case DelivSubOpenLatch:
-				fmt.Println("[DELIVER] Sending LATCH_OPEN to EV3")
+				fmt.Printf("[DELIVER] Sending LATCH_OPEN to EV3 (releasing %d ball(s))\n",
+					state.BallsInHarvester)
 				robotLink.SendLatchOpen()
 				deliverTimer = now.Add(deliverLatchOpenDuration)
 				state.DelivSubPhase = DelivSubWaitLatch
 
-			// ── Step 4: Hold still for 8 seconds while balls roll out ─────────────
+			// ── Step 4: Hold still while balls roll out ───────────────────────────
 			case DelivSubWaitLatch:
 				remaining := time.Until(deliverTimer)
 				gocv.PutText(&img,
-					fmt.Sprintf("DELIVER: LATCH OPEN %.1fs", remaining.Seconds()),
+					fmt.Sprintf("DELIVER: LATCH OPEN %.1fs (%d balls)", remaining.Seconds(),
+						state.BallsInHarvester),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 
 				if now.After(deliverTimer) {
@@ -502,10 +532,14 @@ func main() {
 
 			// ── Step 5: Close latch, mark delivery complete, return to pick ───────
 			case DelivSubCloseLatch:
-				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3")
+				fmt.Printf("[DELIVER] Sending LATCH_CLOSE to EV3. Delivered %d ball(s).\n",
+					state.BallsInHarvester)
 				robotLink.SendLatchClose()
 
-				state.BallsCollected++
+				// Credit all harvested balls as delivered.
+				state.BallsCollected += state.BallsInHarvester
+				state.BallsInHarvester = 0
+
 				if state.CarryingOrange {
 					state.OrangeDelivered = true
 					state.CarryingOrange = false
@@ -544,8 +578,9 @@ func main() {
 			PhaseDone:        "DONE",
 		}[state.Phase]
 
-		statusText := fmt.Sprintf("Balls: %d/11 | Phase: %s | Delivered: %d",
-			ballsTrackedCount, phaseStr, state.BallsCollected)
+		statusText := fmt.Sprintf("Balls: %d/11 | Phase: %s | Delivered: %d | Harvester: %d/%d",
+			ballsTrackedCount, phaseStr, state.BallsCollected,
+			state.BallsInHarvester, state.MaxHarvesterLoad)
 
 		if robot.Detected {
 			statusText += fmt.Sprintf(" | Robot: (%d,%d) %.0f°",

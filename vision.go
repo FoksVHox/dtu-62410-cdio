@@ -52,12 +52,20 @@ type CollectionState struct {
 	CarryingOrange bool
 	// DelivSubPhase tracks which step of the goal-delivery sequence we are in.
 	DelivSubPhase DeliverySubPhase
+	// BallsInHarvester is the number of balls currently held in the harvester
+	// but not yet delivered. The robot collects up to MaxHarvesterLoad balls
+	// before triggering a delivery run.
+	BallsInHarvester int
+	// MaxHarvesterLoad is the target number of balls to collect before delivering.
+	// Set between 4 and 6.
+	MaxHarvesterLoad int
 }
 
 // NewCollectionState returns a fresh FSM ready for an 11-ball run.
 func NewCollectionState() *CollectionState {
 	return &CollectionState{
-		Phase:      PhasePickBall,
-		TotalBalls: 11,
+		Phase:            PhasePickBall,
+		TotalBalls:       11,
+		MaxHarvesterLoad: 5, // collect 5 balls before each delivery trip
 	}
 }
