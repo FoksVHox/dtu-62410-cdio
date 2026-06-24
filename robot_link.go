@@ -19,6 +19,11 @@ import (
 // The EV3 side listens on the same port and maps throttle/turn onto the belt
 // drive. If no address is configured (or the connection drops), RobotLink
 // degrades gracefully and only logs to stdout so the vision UI keeps running.
+//
+// NOTE: The EV3 motor wiring is physically inverted — a positive turn value
+// from the navigator (clockwise intent) must be sent as a negative value over
+// the wire. We apply the negation here at the hardware boundary so every other
+// part of the codebase can use the intuitive positive=CW convention.
 type RobotLink struct {
 	mu       sync.Mutex
 	conn     net.Conn
@@ -108,18 +113,22 @@ func (rl *RobotLink) Send(cmd DriveCommand) {
 	rl.curThr = approach(rl.curThr, targetThr, rl.maxStep)
 	rl.curTurn = approach(rl.curTurn, targetTurn, rl.maxStep)
 
-	line := fmt.Sprintf("%.3f %.3f\n", clamp(rl.curThr, -1, 1), clamp(rl.curTurn, -1, 1))
+	// Negate turn at the wire boundary: EV3 motors are wired so that the
+	// physical rotation direction is opposite to our positive=CW convention.
+	wireTurn := -clamp(rl.curTurn, -1, 1)
+
+	line := fmt.Sprintf("%.3f %.3f\n", clamp(rl.curThr, -1, 1), wireTurn)
 	if cmd.Arrived && rl.curThr == 0 && rl.curTurn == 0 {
 		line = "STOP\n"
 	}
 
 	// --- Verbose debug print ---
-	fmt.Printf("[RobotLink] t=%s | arrived=%v | raw thr=%.3f turn=%.3f | prev thr=%.3f turn=%.3f | SEND thr=%.3f turn=%.3f\n",
+	fmt.Printf("[RobotLink] t=%s | arrived=%v | nav thr=%.3f turn=%.3f | prev thr=%.3f turn=%.3f | SEND thr=%.3f turn=%.3f (wire: negated)\n",
 		now.Format("15:04:05.000"),
 		cmd.Arrived,
 		cmd.Throttle, cmd.Turn,
 		prevThr, prevTurn,
-		clamp(rl.curThr, -1, 1), clamp(rl.curTurn, -1, 1),
+		clamp(rl.curThr, -1, 1), wireTurn,
 	)
 
 	if !rl.enabled || rl.conn == nil {
