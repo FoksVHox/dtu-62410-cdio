@@ -59,9 +59,9 @@ func main() {
 
 	// Phantom latch — keeps the last-known ball position alive for phantomDuration
 	// after the ball disappears under the harvester.
-	var phantomTarget *Ball    // non-nil while latch is active
-	var phantomUntil time.Time // latch expires at this time
-	var phantomOrange bool     // was the latched ball orange?
+	var phantomTarget *Ball      // non-nil while latch is active
+	var phantomUntil time.Time   // latch expires at this time
+	var phantomOrange bool       // was the latched ball orange?
 
 	hsv := gocv.NewMat()
 	defer hsv.Close()
@@ -83,14 +83,14 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor := color.RGBA{255, 0, 0, 0}
-	greenColor := color.RGBA{0, 255, 0, 0}
-	yellowColor := color.RGBA{0, 255, 255, 0}
-	cyanColor := color.RGBA{255, 255, 0, 0}
-	orangeColor := color.RGBA{0, 165, 255, 0}
+	blueColor    := color.RGBA{255, 0, 0, 0}
+	greenColor   := color.RGBA{0, 255, 0, 0}
+	yellowColor  := color.RGBA{0, 255, 255, 0}
+	cyanColor    := color.RGBA{255, 255, 0, 0}
+	orangeColor  := color.RGBA{0, 165, 255, 0}
 	magentaColor := color.RGBA{255, 0, 255, 0}
-	targetColor := color.RGBA{0, 0, 255, 0}
-	grayColor := color.RGBA{160, 160, 160, 0}
+	targetColor  := color.RGBA{0, 0, 255, 0}
+	grayColor    := color.RGBA{160, 160, 160, 0}
 
 	sightings := make(map[image.Point]*ballSighting)
 
@@ -105,7 +105,7 @@ func main() {
 		now := time.Now()
 
 		robot := robotSpotter.TrackRobot(&img)
-		goal := goalSpotter.TrackGoal(&img)
+		goal  := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
 		// PART 1: RED ZONES & ORANGE MASK
@@ -141,7 +141,7 @@ func main() {
 		// PART 2: BALL DETECTION
 		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
-		gocv.Threshold(gray, &thresh, 220, 255, gocv.ThresholdBinary)
+		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
 		gocv.BitwiseOr(thresh, orangeMask, &thresh)
 		gocv.Dilate(thresh, &thresh, kernel)
 		gocv.Erode(thresh, &thresh, kernel)
@@ -158,102 +158,91 @@ func main() {
 			area := gocv.ContourArea(contour)
 
 			if area > 100 && area < 2000 {
-				// 1. Sharpness/Circularity Math
-				perimeter := gocv.ArcLength(contour, true)
-				circularity := 0.0
-				if perimeter > 0 {
-					circularity = (4 * math.Pi * area) / (perimeter * perimeter)
-				}
+				rect := gocv.BoundingRect(contour)
+				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
-				// Only process if the shape is highly circular! (Bypasses glare)
-				if circularity > 0.75 {
-					rect := gocv.BoundingRect(contour)
-					aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
+				if aspectRatio > 0.5 && aspectRatio < 1.5 {
+					centerX := rect.Min.X + (rect.Dx() / 2)
+					centerY := rect.Min.Y + (rect.Dy() / 2)
+					ballCenter := image.Pt(centerX, centerY)
 
-					if aspectRatio > 0.5 && aspectRatio < 1.5 {
-						centerX := rect.Min.X + (rect.Dx() / 2)
-						centerY := rect.Min.Y + (rect.Dy() / 2)
-						ballCenter := image.Pt(centerX, centerY)
+					if robot.Detected && ballCenter.In(robot.Box) {
+						continue
+					}
+					if goal.Detected && ballCenter.In(goal.Box) {
+						continue
+					}
 
-						// EXCLUSION ZONES
-						if robot.Detected && ballCenter.In(robot.Box) {
-							continue
+					radius := rect.Dx() / 2
+
+					isOrange := false
+					if centerX >= 0 && centerX < orangeMask.Cols() &&
+						centerY >= 0 && centerY < orangeMask.Rows() {
+						if orangeMask.GetUCharAt(centerY, centerX) > 0 {
+							isOrange = true
 						}
-						if goal.Detected && ballCenter.In(goal.Box) {
-							continue
+					}
+
+					var matchKey *image.Point
+					for k := range sightings {
+						dx := float64(k.X - centerX)
+						dy := float64(k.Y - centerY)
+						if math.Sqrt(dx*dx+dy*dy) <= stationaryRadius {
+							k := k
+							matchKey = &k
+							break
 						}
+					}
 
-						radius := rect.Dx() / 2
+					var key image.Point
+					if matchKey != nil {
+						key = *matchKey
+						sightings[key].lastSeen = now
+						sightings[key].isOrange = isOrange
+					} else {
+						key = ballCenter
+						sightings[key] = &ballSighting{firstSeen: now, lastSeen: now, isOrange: isOrange}
+					}
+					seenKeys[key] = true
 
-						isOrange := false
-						if centerX >= 0 && centerX < orangeMask.Cols() &&
-							centerY >= 0 && centerY < orangeMask.Rows() {
-							if orangeMask.GetUCharAt(centerY, centerX) > 0 {
-								isOrange = true
+					dwellTime := now.Sub(sightings[key].firstSeen)
+					confirmed := dwellTime >= stationaryThreshold
+
+					if confirmed && ballsTrackedCount < 11 {
+						ballsTrackedCount++
+
+						frameWidth := img.Cols()
+						inRed := false
+						for _, zone := range redZones {
+							if zone.Dx() > int(float32(frameWidth)*0.8) {
+								continue
 							}
-						}
-
-						var matchKey *image.Point
-						for k := range sightings {
-							dx := float64(k.X - centerX)
-							dy := float64(k.Y - centerY)
-							if math.Sqrt(dx*dx+dy*dy) <= stationaryRadius {
-								k := k
-								matchKey = &k
+							if ballCenter.In(zone) {
+								anyBallInRedZone = true
+								inRed = true
 								break
 							}
 						}
 
-						var key image.Point
-						if matchKey != nil {
-							key = *matchKey
-							sightings[key].lastSeen = now
-							sightings[key].isOrange = isOrange
-						} else {
-							key = ballCenter
-							sightings[key] = &ballSighting{firstSeen: now, lastSeen: now, isOrange: isOrange}
+						balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
+
+						drawColor := greenColor
+						if inRed {
+							drawColor = yellowColor
+						} else if isOrange {
+							drawColor = orangeColor
 						}
-						seenKeys[key] = true
+						gocv.Circle(&img, ballCenter, radius, drawColor, 1)
+						gocv.Circle(&img, ballCenter, 4, drawColor, -1)
 
-						dwellTime := now.Sub(sightings[key].firstSeen)
-						confirmed := dwellTime >= stationaryThreshold
-
-						if confirmed && ballsTrackedCount < 11 {
-							ballsTrackedCount++
-
-							frameWidth := img.Cols()
-							inRed := false
-							for _, zone := range redZones {
-								if zone.Dx() > int(float32(frameWidth)*0.8) {
-									continue
-								}
-								if ballCenter.In(zone) {
-									anyBallInRedZone = true
-									inRed = true
-									break
-								}
-							}
-
-							balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
-
-							drawColor := greenColor
-							if inRed {
-								drawColor = yellowColor
-							} else if isOrange {
-								drawColor = orangeColor
-							}
-							gocv.Circle(&img, ballCenter, radius, drawColor, 1)
-							gocv.Circle(&img, ballCenter, 4, drawColor, -1)
-
-							fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
-						} else if !confirmed {
-							remaining := stationaryThreshold - dwellTime
-							gocv.Circle(&img, ballCenter, radius, grayColor, 1)
-							gocv.PutText(&img,
-								fmt.Sprintf("%.1fs", remaining.Seconds()),
-								image.Pt(ballCenter.X+radius+2, ballCenter.Y+4),
-								gocv.FontHersheySimplex, 0.35, grayColor, 1)
-						}
+						fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
+					} else if !confirmed {
+						remaining := stationaryThreshold - dwellTime
+						gocv.Circle(&img, ballCenter, radius, grayColor, 1)
+						gocv.PutText(&img,
+							fmt.Sprintf("%.1fs", remaining.Seconds()),
+							image.Pt(ballCenter.X+radius+2, ballCenter.Y+4),
+							gocv.FontHersheySimplex, 0.35, grayColor, 1)
 					}
 				}
 			}
@@ -265,6 +254,7 @@ func main() {
 				delete(sightings, k)
 			}
 		}
+
 		// ==========================================
 		// PART 4: COLLECTION STATE MACHINE
 		// ==========================================
@@ -336,7 +326,7 @@ func main() {
 				// Ball reached ArrivedRadius — start phantom latch instead of
 				// transitioning immediately. The ball may already be disappearing.
 				phantomTarget = target
-				phantomUntil = now.Add(phantomDuration)
+				phantomUntil  = now.Add(phantomDuration)
 				phantomOrange = target.IsOrange
 				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
