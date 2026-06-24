@@ -64,6 +64,7 @@ func main() {
 	cyanColor := color.RGBA{255, 255, 0, 0}    // Navigation arrow
 	orangeColor := color.RGBA{0, 165, 255, 0}  // VIP orange ball highlight
 	magentaColor := color.RGBA{255, 0, 255, 0} // Deliver-to-goal arrow
+	targetColor := color.RGBA{0, 0, 255, 0}    // DEBUG: currently targeted ball (bright red)
 
 	fmt.Println("System initialised. Running collection FSM.")
 
@@ -278,7 +279,22 @@ func main() {
 		}
 
 		// ==========================================
-		// PART 5: DISPLAY SYSTEM GLOBAL STATUS
+		// PART 5: DEBUG — HIGHLIGHT TARGETED BALL
+		// Overdraw the navTarget ball with a bright red circle and
+		// a "TARGET" label so it is always visually distinct from
+		// the other balls regardless of colour or zone status.
+		// ==========================================
+		if navTarget != nil {
+			targetRadius := 14 // slightly larger than the normal ball radius
+			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 2)
+			gocv.Circle(&img, navTarget.Center, 5, targetColor, -1)
+			gocv.PutText(&img, "TARGET",
+				image.Pt(navTarget.Center.X+targetRadius+4, navTarget.Center.Y+5),
+				gocv.FontHersheySimplex, 0.45, targetColor, 1)
+		}
+
+		// ==========================================
+		// PART 6: DISPLAY SYSTEM GLOBAL STATUS
 		// ==========================================
 		phaseStr := map[Phase]string{
 			PhasePickBall:    "PICK",
