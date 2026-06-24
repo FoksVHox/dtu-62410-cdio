@@ -262,6 +262,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("speed_tps", headSpeed).Info("head motor running continuously")
 
+	// Run back motor continuously so the collection mechanism keeps working
+	// while we navigate.
+	backSpeed := int(float64(back.MaxSpeedTPS()) * motorCfg.Back.Speed)
+	if err := back.RunForever(backSpeed); err != nil {
+		log.WithError(err).Error("failed to start back motor for continuous operation")
+		return
+	}
+	log.WithField("speed_tps", backSpeed).Info("back motor running continuously")
+
 	// Start the drive command server. The PC (vision program) connects to this
 	// address and streams "<throttle> <turn>" commands that steer the belts
 	// toward the white balls. This runs until interrupted.
