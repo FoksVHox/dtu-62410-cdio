@@ -287,13 +287,15 @@ func main() {
 						state.CarryingOrange = true
 					}
 					phantomActive = false
+					// FIX 3: explicitly stop before transitioning to deliver phase.
+					robotLink.Stop()
 					state.Phase = PhaseDeliverGoal
 					break
 				}
 				// Still within latch window — push straight forward, no steering.
+				// FIX 2: bypass the smoothing ramp by writing curThr directly.
+				robotLink.ForceThrottle(phantomThrottle)
 				remaining := time.Until(phantomUntil)
-				cmd = DriveCommand{Throttle: phantomThrottle, Turn: 0, Arrived: false}
-				robotLink.Send(cmd)
 				gocv.PutText(&img,
 					fmt.Sprintf("PHANTOM %.1fs", remaining.Seconds()),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, targetColor, 2)
@@ -318,13 +320,14 @@ func main() {
 
 			if cmd.Arrived {
 				// Ball reached ArrivedRadius — start phantom latch.
-				// The robot will drive straight forward for phantomDuration
-				// to push the ball fully into the harvester.
 				phantomActive = true
 				phantomUntil = now.Add(phantomDuration)
 				phantomOrange = target.IsOrange
 				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms straight-drive phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
+				// FIX 1: send the first phantom command on this same frame so
+				// the robot doesn't coast for one cycle with no command.
+				robotLink.ForceThrottle(phantomThrottle)
 			} else {
 				robotLink.Send(cmd)
 				start, end := ArrowPoints(robot.Center, target.Center, 60)
