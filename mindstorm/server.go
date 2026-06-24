@@ -2,6 +2,7 @@ package mindstorm
 
 import (
 	"bufio"
+	"bot/config"
 	"fmt"
 	"net"
 	"strconv"
@@ -19,11 +20,13 @@ import (
 //
 //	"<throttle> <turn>\n"   e.g. "0.500 -0.200\n"  (values in [-1, 1])
 //	"STOP\n"                halt the belts
+//	"LATCH_OPEN\n"          fire the back motor to open the ball-release latch
 //
 // A watchdog stops the belts automatically if no command is received within
 // CommandTimeout, so the robot never runs away when the link drops.
 type CommandServer struct {
 	drive   *BeltDrive
+	back    *Motor
 	addr    string
 	timeout time.Duration
 
@@ -33,13 +36,15 @@ type CommandServer struct {
 }
 
 // NewCommandServer creates a server that drives `drive` from commands received
-// on `addr` (for example ":9000").
-func NewCommandServer(drive *BeltDrive, addr string) *CommandServer {
+// on `addr` (for example ":9000"). The `back` motor is used to open the
+// ball-release latch when the LATCH_OPEN command is received.
+func NewCommandServer(drive *BeltDrive, back *Motor, addr string) *CommandServer {
 	if strings.TrimSpace(addr) == "" {
 		addr = ":9000"
 	}
 	return &CommandServer{
 		drive:   drive,
+		back:    back,
 		addr:    addr,
 		timeout: 750 * time.Millisecond,
 	}
@@ -100,6 +105,12 @@ func (s *CommandServer) applyLine(line string) {
 		return
 	}
 
+	// LATCH_OPEN: stop the belts then fire the back motor to release balls.
+	if strings.EqualFold(line, "LATCH_OPEN") {
+		s.openLatch()
+		return
+	}
+
 	fields := strings.Fields(line)
 	if len(fields) != 2 {
 		log.WithField("line", line).Warn("mindstorm: malformed command (expected '<throttle> <turn>')")
@@ -121,6 +132,31 @@ func (s *CommandServer) applyLine(line string) {
 	s.mu.Lock()
 	s.moving = true
 	s.mu.Unlock()
+}
+
+// openLatch stops the belts and activates the back motor for the configured
+// latch-open duration so the harvested balls are released into the goal.
+func (s *CommandServer) openLatch() {
+	log.Info("mindstorm: LATCH_OPEN received — stopping belts and opening latch")
+	s.stop()
+
+	if s.back == nil {
+		log.Warn("mindstorm: back motor not configured, cannot open latch")
+		return
+	}
+
+	motorCfg := config.Get().Mindstorm.Motors
+	backSpeed := int(float64(s.back.MaxSpeedTPS()) * motorCfg.Back.Speed)
+	latchDurationMS := int(motorCfg.LatchOpenTime.Milliseconds())
+
+	log.WithFields(log.Fields{
+		"speed_tps":    backSpeed,
+		"duration_ms":  latchDurationMS,
+	}).Info("mindstorm: firing back motor (latch open)")
+
+	if err := s.back.RunTimed(backSpeed, latchDurationMS); err != nil {
+		log.WithError(err).Error("mindstorm: failed to fire back motor for latch open")
+	}
 }
 
 func (s *CommandServer) stop() {
