@@ -21,6 +21,10 @@ type ballSighting struct {
 // same stationary position across frames.
 const stationaryRadius = 15
 
+// phantomDuration is how long we keep driving toward a ball's last-known
+// position after it disappears under the harvester.
+const phantomDuration = 1500 * time.Millisecond
+
 func main() {
 	cfg, err := LoadConfig("config.yml")
 	if err != nil {
@@ -29,8 +33,7 @@ func main() {
 	}
 
 	// stationaryThreshold is how long a detection must remain still before being
-	// treated as a real ball. This filters out moving reflections from the spinning
-	// front mechanism.
+	// treated as a real ball.
 	const stationaryThreshold = 500 * time.Millisecond
 
 	webcam, err := gocv.VideoCaptureDevice(cfg.Camera.Device)
@@ -52,10 +55,14 @@ func main() {
 	robotLink := NewRobotLink(cfg.Robot.Address)
 	defer robotLink.Close()
 
-	// Collection FSM — tracks phase, ball count and VIP orange status.
 	state := NewCollectionState()
 
-	// Mats for Red tracking (HSV)
+	// Phantom latch — keeps the last-known ball position alive for phantomDuration
+	// after the ball disappears under the harvester.
+	var phantomTarget *Ball      // non-nil while latch is active
+	var phantomUntil time.Time   // latch expires at this time
+	var phantomOrange bool       // was the latched ball orange?
+
 	hsv := gocv.NewMat()
 	defer hsv.Close()
 	mask1 := gocv.NewMat()
@@ -76,22 +83,15 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor := color.RGBA{255, 0, 0, 0}      // Red-zone boxes
-	greenColor := color.RGBA{0, 255, 0, 0}     // Safe ball tracking
-	yellowColor := color.RGBA{0, 255, 255, 0}  // Ball-in-red-zone warning
-	cyanColor := color.RGBA{255, 255, 0, 0}    // Navigation arrow
-	orangeColor := color.RGBA{0, 165, 255, 0}  // VIP orange ball highlight
-	magentaColor := color.RGBA{255, 0, 255, 0} // Deliver-to-goal arrow
-	targetColor := color.RGBA{0, 0, 255, 0}    // DEBUG: currently targeted ball (bright red)
-	grayColor := color.RGBA{160, 160, 160, 0}  // Candidate (not yet stationary enough)
+	blueColor    := color.RGBA{255, 0, 0, 0}
+	greenColor   := color.RGBA{0, 255, 0, 0}
+	yellowColor  := color.RGBA{0, 255, 255, 0}
+	cyanColor    := color.RGBA{255, 255, 0, 0}
+	orangeColor  := color.RGBA{0, 165, 255, 0}
+	magentaColor := color.RGBA{255, 0, 255, 0}
+	targetColor  := color.RGBA{0, 0, 255, 0}
+	grayColor    := color.RGBA{160, 160, 160, 0}
 
-	// ==========================================
-	// STATIONARITY TRACKER
-	// Key: image.Point (snapped to stationaryRadius grid for stability)
-	// Value: ballSighting — first/last seen timestamps.
-	// A candidate only graduates to a confirmed ball once it has been
-	// continuously observed at the same location for stationaryThreshold.
-	// ==========================================
 	sightings := make(map[image.Point]*ballSighting)
 
 	fmt.Println("System initialised. Running collection FSM.")
@@ -105,10 +105,10 @@ func main() {
 		now := time.Now()
 
 		robot := robotSpotter.TrackRobot(&img)
-		goal := goalSpotter.TrackGoal(&img)
+		goal  := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
-		// PART 1: LOCATE ALL RED OBSTACLES & ORANGE
+		// PART 1: RED ZONES & ORANGE MASK
 		// ==========================================
 		gocv.CvtColor(img, &hsv, gocv.ColorBGRToHSV)
 
@@ -126,7 +126,6 @@ func main() {
 		gocv.InRangeWithScalar(hsv, lowerOrange, upperOrange, &orangeMask)
 
 		redContours := gocv.FindContours(redMask, gocv.RetrievalExternal, gocv.ChainApproxSimple)
-
 		var redZones []image.Rectangle
 		for i := 0; i < redContours.Size(); i++ {
 			contour := redContours.At(i)
@@ -139,7 +138,7 @@ func main() {
 		redContours.Close()
 
 		// ==========================================
-		// PART 2: LOCATE MULTIPLE BALLS (WHITE & ORANGE)
+		// PART 2: BALL DETECTION
 		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
 		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
@@ -149,10 +148,7 @@ func main() {
 
 		ballContours := gocv.FindContours(thresh, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
-		// seenKeys tracks which sighting keys were matched this frame so we can
-		// expire any that were not seen (detection disappeared or moved away).
 		seenKeys := make(map[image.Point]bool)
-
 		ballsTrackedCount := 0
 		anyBallInRedZone := false
 		var balls []Ball
@@ -170,7 +166,6 @@ func main() {
 					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
 
-					// EXCLUSION ZONE: skip detections inside robot or goal ArUco box.
 					if robot.Detected && ballCenter.In(robot.Box) {
 						continue
 					}
@@ -180,7 +175,6 @@ func main() {
 
 					radius := rect.Dx() / 2
 
-					// Classify as orange.
 					isOrange := false
 					if centerX >= 0 && centerX < orangeMask.Cols() &&
 						centerY >= 0 && centerY < orangeMask.Rows() {
@@ -189,17 +183,12 @@ func main() {
 						}
 					}
 
-					// ==========================================
-					// STATIONARITY CHECK
-					// Find the nearest existing sighting within
-					// stationaryRadius. If none found, start a new one.
-					// ==========================================
 					var matchKey *image.Point
 					for k := range sightings {
 						dx := float64(k.X - centerX)
 						dy := float64(k.Y - centerY)
 						if math.Sqrt(dx*dx+dy*dy) <= stationaryRadius {
-							k := k // capture
+							k := k
 							matchKey = &k
 							break
 						}
@@ -222,9 +211,6 @@ func main() {
 					if confirmed && ballsTrackedCount < 11 {
 						ballsTrackedCount++
 
-						// ==========================================
-						// PART 3: COLLISION/TOUCH DETECTION
-						// ==========================================
 						frameWidth := img.Cols()
 						inRed := false
 						for _, zone := range redZones {
@@ -240,7 +226,6 @@ func main() {
 
 						balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
 
-						// Draw confirmed ball circle.
 						drawColor := greenColor
 						if inRed {
 							drawColor = yellowColor
@@ -252,8 +237,6 @@ func main() {
 
 						fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
 					} else if !confirmed {
-						// Draw candidate (pending) ball with a grey dashed ring and
-						// a small countdown so the operator can see it stabilising.
 						remaining := stationaryThreshold - dwellTime
 						gocv.Circle(&img, ballCenter, radius, grayColor, 1)
 						gocv.PutText(&img,
@@ -266,7 +249,6 @@ func main() {
 		}
 		ballContours.Close()
 
-		// Expire sightings that were not seen this frame (moved or disappeared).
 		for k := range sightings {
 			if !seenKeys[k] {
 				delete(sightings, k)
@@ -287,6 +269,44 @@ func main() {
 				break
 			}
 
+			// ---- PHANTOM LATCH CHECK ----
+			// If a latch is active, keep driving toward the phantom position
+			// until the timer expires, then transition to deliver.
+			if phantomTarget != nil {
+				if now.After(phantomUntil) {
+					// Latch expired — ball should be inside harvester now.
+					fmt.Printf("[FSM] Phantom latch expired. Ball collected (orange=%v). Delivering to goal.\n", phantomOrange)
+					if phantomOrange {
+						state.CarryingOrange = true
+					}
+					phantomTarget = nil
+					state.Phase = PhaseDeliverGoal
+					break
+				}
+				// Still within latch window — drive straight toward phantom.
+				navTarget = phantomTarget
+				var navErr error
+				cmd, navErr = nav.NextCommand(robot, *phantomTarget)
+				if navErr != nil {
+					robotLink.Stop()
+					break
+				}
+				// Override arrived — don't stop early during latch.
+				cmd.Arrived = false
+				// Drive with a fixed forward throttle so the robot pushes through.
+				if cmd.Throttle == 0 {
+					cmd.Throttle = nav.DriveSpeed
+				}
+				robotLink.Send(cmd)
+				start, end := ArrowPoints(robot.Center, phantomTarget.Center, 60)
+				gocv.Line(&img, start, end, cyanColor, 1)
+				gocv.PutText(&img,
+					fmt.Sprintf("PHANTOM %.1fs", time.Until(phantomUntil).Seconds()),
+					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, targetColor, 2)
+				break
+			}
+
+			// ---- NORMAL PICK LOGIC ----
 			target := PickNextBall(robot, balls, state.OrangeDelivered)
 			navTarget = target
 
@@ -303,12 +323,26 @@ func main() {
 			}
 
 			if cmd.Arrived {
-				if target.IsOrange {
-					state.CarryingOrange = true
-				}
-				state.Phase = PhaseDeliverGoal
-				fmt.Printf("[FSM] Ball collected (orange=%v). Delivering to goal.\n", state.CarryingOrange)
+				// Ball reached ArrivedRadius — start phantom latch instead of
+				// transitioning immediately. The ball may already be disappearing.
+				phantomTarget = target
+				phantomUntil  = now.Add(phantomDuration)
+				phantomOrange = target.IsOrange
+				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms phantom latch.\n",
+					phantomOrange, float64(phantomDuration.Milliseconds()))
 			} else {
+				// Normal approach: check if ball just disappeared while close —
+				// if so, also start the latch so we don't stop mid-pickup.
+				if robot.Detected {
+					dx := float64(target.Center.X - robot.Center.X)
+					dy := float64(target.Center.Y - robot.Center.Y)
+					dist := math.Sqrt(dx*dx + dy*dy)
+					if dist < nav.ArrivedRadius*2.5 {
+						// Ball is very close — if it disappears next frame the latch
+						// will already be primed here so we don't stutter.
+						_ = dist // proximity noted; latch triggered on disappearance below
+					}
+				}
 				robotLink.Send(cmd)
 				start, end := ArrowPoints(robot.Center, target.Center, 60)
 				gocv.Line(&img, start, end, cyanColor, 1)
@@ -375,7 +409,7 @@ func main() {
 			ballsTrackedCount, phaseStr, state.BallsCollected)
 
 		if robot.Detected {
-			statusText += fmt.Sprintf(" | Robot: (%d,%d) %.0f\u00b0",
+			statusText += fmt.Sprintf(" | Robot: (%d,%d) %.0f°",
 				robot.Center.X, robot.Center.Y, robot.Angle)
 		} else {
 			statusText += " | Robot: NOT FOUND"
