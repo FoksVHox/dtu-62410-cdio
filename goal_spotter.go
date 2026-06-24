@@ -20,7 +20,8 @@ type GoalSpotter struct {
 	cyanColor color.RGBA
 }
 
-// NewGoalSpotter initializes tracking for Marker ID 2
+// NewGoalSpotter initializes tracking for ArUco Marker ID 2.
+// ID 0 is reserved for the robot; ID 2 is placed on the goal/disposal zone.
 func NewGoalSpotter() *GoalSpotter {
 	dict := gocv.GetPredefinedDictionary(gocv.ArucoDict4x4_250)
 	params := gocv.NewArucoDetectorParameters()
@@ -34,26 +35,26 @@ func NewGoalSpotter() *GoalSpotter {
 
 	return &GoalSpotter{
 		detector:  gocv.NewArucoDetectorWithParams(dict, params),
-		cyanColor: color.RGBA{0, 255, 255, 0}, // Cyan blue for goal assets
+		cyanColor: color.RGBA{0, 255, 255, 0},
 	}
 }
 
-// TrackGoal scans the frame specifically looking for Marker ID 2
+// TrackGoal scans the frame for ArUco Marker ID 2 (the goal/disposal zone).
 func (gs *GoalSpotter) TrackGoal(frame *gocv.Mat) GoalData {
 	var goal GoalData
 
 	corners, ids, _ := gs.detector.DetectMarkers(*frame)
 
-	// Find if Marker ID 2 is anywhere in the detected list
+	// Find marker ID 2 in the detected list.
+	// ID 0 is the robot marker (tracked by RobotSpotter) — must not overlap.
 	targetIndex := -1
 	for idx, id := range ids {
-		if id == 1 {
+		if id == 2 {
 			targetIndex = idx
 			break
 		}
 	}
 
-	// If Marker ID 2 wasn't found, exit early
 	if targetIndex == -1 {
 		return goal
 	}
@@ -65,8 +66,6 @@ func (gs *GoalSpotter) TrackGoal(frame *gocv.Mat) GoalData {
 		return goal
 	}
 
-	// 1. Calculate bounding rectangle around the goal marker
-	// We use the first corner and build a rectangle from the points
 	minX, minY := int(goalCorners[0].X), int(goalCorners[0].Y)
 	maxX, maxY := minX, minY
 
@@ -92,10 +91,10 @@ func (gs *GoalSpotter) TrackGoal(frame *gocv.Mat) GoalData {
 	goal.Center = image.Pt(int(sumX/4), int(sumY/4))
 	goal.Box = image.Rect(minX, minY, maxX, maxY)
 
-	// 2. Visuals: Draw a cyan target box around the goal zone slot
+	// Draw a cyan target box around the goal zone
 	gocv.Rectangle(frame, goal.Box, gs.cyanColor, 3)
 	gocv.Circle(frame, goal.Center, 5, gs.cyanColor, -1)
-	gocv.PutText(frame, "DISPOSAL GOAL", image.Pt(minX, minY-10), gocv.FontHersheySimplex, 0.5, gs.cyanColor, 2)
+	gocv.PutText(frame, "GOAL [ID 2]", image.Pt(minX, minY-10), gocv.FontHersheySimplex, 0.5, gs.cyanColor, 2)
 
 	return goal
 }
