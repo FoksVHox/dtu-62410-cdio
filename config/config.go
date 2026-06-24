@@ -58,10 +58,15 @@ type MotorsConfiguration struct {
 	Head  MotorConfiguration `json:"head" yaml:"head"`
 	Back  MotorConfiguration `json:"back" yaml:"back"`
 
-	// LatchOpenTime is how long the back motor runs when LATCH_OPEN is received.
+	// LatchOpenTime is how long the back motor runs forward when LATCH_OPEN is received.
 	// This controls how long the ball-release mechanism stays open.
-	// Default: 8 seconds.
-	LatchOpenTime time.Duration `default:"8s" json:"latch_open_time" yaml:"latch_open_time"`
+	// Default: 2 seconds.
+	LatchOpenTime time.Duration `default:"2s" json:"latch_open_time" yaml:"latch_open_time"`
+
+	// LatchCloseTime is how long the back motor runs in reverse when LATCH_CLOSE
+	// is received, to physically retract the latch back to its resting position.
+	// Default: 2 seconds.
+	LatchCloseTime time.Duration `default:"2s" json:"latch_close_time" yaml:"latch_close_time"`
 
 	MotorTestTime time.Duration `json:"motor_test_time" yaml:"motor_test_time"`
 }
