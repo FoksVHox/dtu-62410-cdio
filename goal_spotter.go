@@ -49,7 +49,7 @@ func (gs *GoalSpotter) TrackGoal(frame *gocv.Mat) GoalData {
 	// ID 0 is the robot marker (tracked by RobotSpotter) — must not overlap.
 	targetIndex := -1
 	for idx, id := range ids {
-		if id == 2 {
+		if id == 1 {
 			targetIndex = idx
 			break
 		}
