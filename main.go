@@ -9,7 +9,13 @@ import (
 )
 
 func main() {
-	webcam, err := gocv.VideoCaptureDevice(1)
+	cfg, err := LoadConfig("config.yml")
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+
+	webcam, err := gocv.VideoCaptureDevice(cfg.Camera.Device)
 	if err != nil {
 		fmt.Printf("Error opening video capture device: %v\n", err)
 		return
@@ -25,7 +31,7 @@ func main() {
 	robotSpotter := NewRobotSpotter()
 	goalSpotter := NewGoalSpotter()
 	nav := NewNavigator()
-	robotLink := NewRobotLink("169.254.201.177:9000")
+	robotLink := NewRobotLink(cfg.Robot.Address)
 	defer robotLink.Close()
 
 	// Collection FSM — tracks phase, ball count and VIP orange status.
@@ -194,27 +200,13 @@ func main() {
 		// ==========================================
 		// PART 4: COLLECTION STATE MACHINE
 		// ==========================================
-		//
-		//  PhasePickBall
-		//    Navigate to the next ball (orange first for VIP bonus).
-		//    On Arrived → transition to PhaseDeliverGoal.
-		//
-		//  PhaseDeliverGoal
-		//    Navigate to the goal marker centre.
-		//    On Arrived → increment delivered count; if all done → PhaseDone;
-		//                 else back to PhasePickBall.
-		//
-		//  PhaseDone
-		//    Stop all movement.
-		//
 		var cmd DriveCommand
-		var navTarget *Ball // used only in PhasePickBall for debug overlay
+		var navTarget *Ball
 
 		switch state.Phase {
 
 		case PhasePickBall:
 			if state.BallsCollected >= state.TotalBalls {
-				// Sanity check: all balls already counted, skip to done.
 				state.Phase = PhaseDone
 				break
 			}
@@ -223,7 +215,6 @@ func main() {
 			navTarget = target
 
 			if target == nil {
-				// No reachable ball visible — hold still.
 				robotLink.Stop()
 				break
 			}
@@ -236,23 +227,19 @@ func main() {
 			}
 
 			if cmd.Arrived {
-				// Ball collected — record whether it was the orange VIP ball.
 				if target.IsOrange {
 					state.CarryingOrange = true
 				}
-				// Switch to delivery phase.
 				state.Phase = PhaseDeliverGoal
 				fmt.Printf("[FSM] Ball collected (orange=%v). Delivering to goal.\n", state.CarryingOrange)
 			} else {
 				robotLink.Send(cmd)
-				// Draw navigation arrow (cyan) toward the ball.
 				start, end := ArrowPoints(robot.Center, target.Center, 60)
 				gocv.Line(&img, start, end, cyanColor, 2)
 			}
 
 		case PhaseDeliverGoal:
 			if !goal.Detected {
-				// Goal marker not visible — keep still and wait for it to appear.
 				robotLink.Stop()
 				gocv.PutText(&img, "WAITING FOR GOAL MARKER", image.Pt(20, 100),
 					gocv.FontHersheySimplex, 0.7, magentaColor, 2)
@@ -267,7 +254,6 @@ func main() {
 			}
 
 			if cmd.Arrived {
-				// Ball deposited at goal.
 				state.BallsCollected++
 				if state.CarryingOrange {
 					state.OrangeDelivered = true
@@ -283,7 +269,6 @@ func main() {
 				}
 			} else {
 				robotLink.Send(cmd)
-				// Draw navigation arrow (magenta) toward the goal.
 				start, end := ArrowPoints(robot.Center, goal.Center, 60)
 				gocv.Line(&img, start, end, magentaColor, 1)
 			}

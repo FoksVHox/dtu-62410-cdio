@@ -1,22 +1,7 @@
 system:
   root_directory: .
   log_directory: ./logs
-mindstorm:
-  motors:
-    left:
-      address: motor0
-      inverted: false
-      speed: 0.4
-    right:
-      address: motor2
-      inverted: true
-      speed: 0.4
-    head:
-      address: motor2
-      inverted: true
-      speed: 0.5
-    back:
-      address: motor1
-      inverted: false
-      speed: 0.5
-    motor_test_time: 30s
+robot:
+  address: "169.254.201.177:9000"
+camera:
+  device: 1
