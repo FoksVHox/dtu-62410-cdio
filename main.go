@@ -30,8 +30,8 @@ const phantomThrottle = 0.55
 
 // ── Goal-delivery tuning ──────────────────────────────────────────────────────
 
-// deliverTurn180Tol is the heading error (degrees) at which the 180° turn is
-// considered complete and we switch to reversing.
+// deliverTurn180Tol is the heading error (degrees) at which the perpendicular
+// alignment to the goal marker face is considered complete.
 const deliverTurn180Tol = 8.0
 
 // deliverBackupSpeed is the reverse throttle magnitude used when backing into
@@ -40,7 +40,8 @@ const deliverBackupSpeed = 0.40
 
 // deliverGoalArrivalPx is the pixel distance from the goal centre at which we
 // consider the robot close enough to open the latch.
-const deliverGoalArrivalPx = 70.0
+// Raised to 120px so the robot stops comfortably before the marker.
+const deliverGoalArrivalPx = 120.0
 
 // deliverLatchOpenDuration is how long the latch stays open (motor forward)
 // before the close command is sent.
@@ -94,6 +95,11 @@ func main() {
 	// lockedTarget is the ball the robot is currently committed to collecting.
 	var lockedTarget *Ball
 
+	// lastGoalFaceAngle stores the most recent valid goal face angle so the
+	// alignment step can continue even if the marker is briefly occluded.
+	var lastGoalFaceAngle float64
+	var lastGoalFaceAngleValid bool
+
 	hsv := gocv.NewMat()
 	defer hsv.Close()
 	mask1 := gocv.NewMat()
@@ -133,6 +139,12 @@ func main() {
 
 		robot := robotSpotter.TrackRobot(&img)
 		goal := goalSpotter.TrackGoal(&img)
+
+		// Cache the goal face angle whenever we have a valid reading.
+		if goal.Detected {
+			lastGoalFaceAngle = goal.FaceAngle
+			lastGoalFaceAngleValid = true
+		}
 
 		// ==========================================
 		// PART 1: RED ZONES
@@ -400,33 +412,49 @@ func main() {
 
 			switch state.DelivSubPhase {
 
-			// ── Step 1: Spin 180° so the robot's back faces the goal ─────────────
+			// ── Step 1: Align robot back perpendicular to the goal marker face ───────
+			//
+			// Strategy: read FaceAngle from the ArUco marker (the outward normal of
+			// its top edge). The robot must reverse along that normal, so its back
+			// must face the direction the marker is "looking" at us, i.e. the robot
+			// heading = FaceAngle + 180°.
+			//
+			// If the marker is briefly occluded we fall back to the last cached
+			// FaceAngle, and as a last resort to the bearing-to-centre method.
 			case DelivSubTurn180:
-				if !goal.Detected {
+				// Determine target heading: robot back must face the marker's outward normal.
+				var targetHeading float64
+				if goal.Detected {
+					// Primary: use the marker face normal directly.
+					// The robot's FRONT must face away from the marker (FaceAngle + 180),
+					// so that the robot's BACK faces the marker front — ready to reverse in.
+					targetHeading = math.Mod(goal.FaceAngle+180, 360)
+					fmt.Printf("[DELIVER] TURN180 | using marker FaceAngle=%.1f° → targetHeading=%.1f°\n",
+						goal.FaceAngle, targetHeading)
+				} else if lastGoalFaceAngleValid {
+					// Fallback 1: use cached face angle from last frame.
+					targetHeading = math.Mod(lastGoalFaceAngle+180, 360)
+					gocv.PutText(&img, "DELIVER TURN180: marker occluded — using cached angle",
+						image.Pt(20, 120), gocv.FontHersheySimplex, 0.5, magentaColor, 1)
+					fmt.Printf("[DELIVER] TURN180 | marker lost — using cached FaceAngle=%.1f° → targetHeading=%.1f°\n",
+						lastGoalFaceAngle, targetHeading)
+				} else {
+					// Fallback 2: no marker data at all — wait in place.
 					robotLink.Stop()
 					gocv.PutText(&img, "DELIVER TURN180: waiting for goal marker",
 						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 					break
 				}
 
-				dx := float64(goal.Center.X - robot.Center.X)
-				dy := float64(goal.Center.Y - robot.Center.Y)
-				bearingToGoal := math.Atan2(dy, dx) * 180.0 / math.Pi
-				if bearingToGoal < 0 {
-					bearingToGoal += 360
-				}
-				targetHeading := math.Mod(bearingToGoal+180, 360)
 				headingErr := normaliseAngle(targetHeading - robot.Angle)
 				absErr := math.Abs(headingErr)
 
 				gocv.PutText(&img,
-					fmt.Sprintf("DELIVER: TURN180 err=%.0f°", headingErr),
+					fmt.Sprintf("DELIVER: TURN180 err=%.0f° target=%.0f°", headingErr, targetHeading),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
-				fmt.Printf("[DELIVER] TURN180 | robotAngle=%.1f° targetHeading=%.1f° err=%.2f°\n",
-					robot.Angle, targetHeading, headingErr)
 
 				if absErr <= deliverTurn180Tol {
-					fmt.Println("[DELIVER] TURN180 complete — switching to BACK_UP")
+					fmt.Println("[DELIVER] TURN180 complete — robot aligned perpendicular to goal. Switching to BACK_UP.")
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubBackUp
 					break
@@ -436,9 +464,14 @@ func main() {
 				turnMag := math.Min(absErr/15.0, 1.0) * 0.4
 				robotLink.Send(DriveCommand{Throttle: 0, Turn: turnSign * turnMag})
 
-			// ── Step 2: Reverse straight into the goal ───────────────────────────
+			// ── Step 2: Reverse straight into the goal, stop short of the marker ────
+			//
+			// The robot reverses along the marker face normal. Steering correction
+			// keeps the approach straight. We stop at deliverGoalArrivalPx pixels
+			// from the marker centre, which leaves enough room to open the latch.
 			case DelivSubBackUp:
 				if !goal.Detected {
+					// Marker briefly lost — keep reversing on the last known heading.
 					robotLink.ForceReverse(deliverBackupSpeed)
 					gocv.PutText(&img, "DELIVER BACK_UP: goal marker lost — continuing",
 						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
@@ -450,25 +483,30 @@ func main() {
 				dist := math.Sqrt(dx*dx + dy*dy)
 
 				gocv.PutText(&img,
-					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx", dist),
+					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx (stop at %.0fpx)", dist, deliverGoalArrivalPx),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 				gocv.Line(&img, robot.Center, goal.Center, magentaColor, 1)
 				fmt.Printf("[DELIVER] BACK_UP | dist=%.1fpx goal=(%d,%d) robot=(%d,%d)\n",
 					dist, goal.Center.X, goal.Center.Y, robot.Center.X, robot.Center.Y)
 
 				if dist <= deliverGoalArrivalPx {
-					fmt.Println("[DELIVER] BACK_UP complete — robot in goal, opening latch")
+					fmt.Printf("[DELIVER] BACK_UP complete — stopped %.0fpx from goal marker. Opening latch.\n", dist)
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubOpenLatch
 					break
 				}
 
-				bearingToGoal := math.Atan2(dy, dx) * 180.0 / math.Pi
-				if bearingToGoal < 0 {
-					bearingToGoal += 360
+				// Steering: keep the robot aligned with the marker face normal while reversing.
+				// Use the live FaceAngle when available, otherwise fall back to cached value.
+				var approachAngle float64
+				if goal.Detected {
+					approachAngle = math.Mod(goal.FaceAngle+180, 360)
+				} else {
+					approachAngle = math.Mod(lastGoalFaceAngle+180, 360)
 				}
-				backFacing := math.Mod(robot.Angle+180, 360)
-				steerErr := normaliseAngle(bearingToGoal - backFacing)
+				// The robot's back should face approachAngle, i.e. robot.Angle = approachAngle.
+				// Steer to correct drift.
+				steerErr := normaliseAngle(approachAngle - robot.Angle)
 				steerCorr := math.Max(-0.25, math.Min(0.25, steerErr*0.015))
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
@@ -558,7 +596,7 @@ func main() {
 			statusText += " | Robot: NOT FOUND"
 		}
 		if goal.Detected {
-			statusText += fmt.Sprintf(" | Goal: (%d,%d)", goal.Center.X, goal.Center.Y)
+			statusText += fmt.Sprintf(" | Goal: (%d,%d) face=%.0f°", goal.Center.X, goal.Center.Y, goal.FaceAngle)
 		} else {
 			statusText += " | Goal: NOT FOUND"
 		}
