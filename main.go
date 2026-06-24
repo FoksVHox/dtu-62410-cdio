@@ -129,12 +129,25 @@ func main() {
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
 				if aspectRatio > 0.5 && aspectRatio < 1.5 {
-					ballsTrackedCount++
-
 					centerX := rect.Min.X + (rect.Dx() / 2)
 					centerY := rect.Min.Y + (rect.Dy() / 2)
-					radius := rect.Dx() / 2
 					ballCenter := image.Pt(centerX, centerY)
+
+					// ==========================================
+					// EXCLUSION ZONE: skip detections whose centre
+					// falls inside the robot or goal ArUco bounding
+					// box (purple square), to prevent false positives.
+					// ==========================================
+					if robot.Detected && ballCenter.In(robot.Box) {
+						continue
+					}
+					if goal.Detected && ballCenter.In(goal.Box) {
+						continue
+					}
+
+					ballsTrackedCount++
+
+					radius := rect.Dx() / 2
 
 					// ==========================================
 					// PART 3: COLLISION/TOUCH DETECTION
