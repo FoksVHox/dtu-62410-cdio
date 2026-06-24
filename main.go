@@ -20,20 +20,17 @@ func main() {
 	window := gocv.NewWindow("Master Tracking System")
 	defer window.Close()
 
-	// Main window frame matrix
 	img := gocv.NewMat()
 	defer img.Close()
 
-	// Initialize our new dedicated Robot Spotter module!
 	robotSpotter := NewRobotSpotter()
 	goalSpotter := NewGoalSpotter()
 	nav := NewNavigator()
-	// Connect to the physical robot
 	robotLink := NewRobotLink(os.Getenv("ROBOT_ADDR"))
 	defer robotLink.Close()
 
-	// Navigation logic
-	//nav := NewNavigator()
+	// Collection FSM — tracks phase, ball count and VIP orange status.
+	state := NewCollectionState()
 
 	// Mats for Red tracking (HSV)
 	hsv := gocv.NewMat()
@@ -45,11 +42,9 @@ func main() {
 	redMask := gocv.NewMat()
 	defer redMask.Close()
 
-	// Mat for Orange Ball tracking (HSV)
 	orangeMask := gocv.NewMat()
 	defer orangeMask.Close()
 
-	// Mats for White Ball tracking (Grayscale)
 	gray := gocv.NewMat()
 	defer gray.Close()
 	thresh := gocv.NewMat()
@@ -58,18 +53,21 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor := color.RGBA{255, 0, 0, 0}     // For red zones
+	blueColor := color.RGBA{255, 0, 0, 0}     // Red-zone boxes
 	greenColor := color.RGBA{0, 255, 0, 0}    // Safe ball tracking
-	yellowColor := color.RGBA{0, 255, 255, 0} // Forbidden touch warning
+	yellowColor := color.RGBA{0, 255, 255, 0} // Ball-in-red-zone warning
 	cyanColor := color.RGBA{255, 255, 0, 0}   // Navigation arrow
+	orangeColor := color.RGBA{0, 165, 255, 0} // VIP orange ball highlight
+	magentaColor := color.RGBA{255, 0, 255, 0} // Deliver-to-goal arrow
 
-	fmt.Println("System initialized. Tracking red obstacles, white balls, and 1 orange ball simultaneously!")
+	fmt.Println("System initialised. Running collection FSM.")
 
 	for {
 		if ok := webcam.Read(&img); !ok || img.Empty() {
 			fmt.Println("Device closed or failed to read frame")
 			return
 		}
+
 		robot := robotSpotter.TrackRobot(&img)
 		goal := goalSpotter.TrackGoal(&img)
 
@@ -78,7 +76,6 @@ func main() {
 		// ==========================================
 		gocv.CvtColor(img, &hsv, gocv.ColorBGRToHSV)
 
-		// Red boundaries
 		lowerRed1 := gocv.NewScalar(0, 100, 100, 0)
 		upperRed1 := gocv.NewScalar(10, 255, 255, 0)
 		lowerRed2 := gocv.NewScalar(170, 100, 100, 0)
@@ -88,23 +85,18 @@ func main() {
 		gocv.InRangeWithScalar(hsv, lowerRed2, upperRed2, &mask2)
 		gocv.BitwiseOr(mask1, mask2, &redMask)
 
-		// Isolate the Orange Ball using HSV (Hue range 11 to 25 for orange)
 		lowerOrange := gocv.NewScalar(11, 100, 100, 0)
 		upperOrange := gocv.NewScalar(25, 255, 255, 0)
 		gocv.InRangeWithScalar(hsv, lowerOrange, upperOrange, &orangeMask)
 
 		redContours := gocv.FindContours(redMask, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
-		// Dynamic slice to store the positions of red zones
 		var redZones []image.Rectangle
-
 		for i := 0; i < redContours.Size(); i++ {
 			contour := redContours.At(i)
 			if gocv.ContourArea(contour) > 400 {
 				rect := gocv.BoundingRect(contour)
 				redZones = append(redZones, rect)
-
-				// Draw the blue boundary boxes around red objects
 				gocv.Rectangle(&img, rect, blueColor, 2)
 			}
 		}
@@ -115,39 +107,28 @@ func main() {
 		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
 		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
-
-		// Combine the white binary mask and orange binary mask together!
 		gocv.BitwiseOr(thresh, orangeMask, &thresh)
-
-		// Morphological clean up applies to both colors automatically now
 		gocv.Dilate(thresh, &thresh, kernel)
 		gocv.Erode(thresh, &thresh, kernel)
 
 		ballContours := gocv.FindContours(thresh, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
-		// Keep track of how many balls have been detected in the frame
 		ballsTrackedCount := 0
 		anyBallInRedZone := false
-
-		// Collect all detected balls for the navigator
 		var balls []Ball
 
 		for i := 0; i < ballContours.Size(); i++ {
-			// Stop looking if we already hit our 11 ball maximum target
 			if ballsTrackedCount >= 11 {
 				break
 			}
-
 			contour := ballContours.At(i)
 			area := gocv.ContourArea(contour)
 
-			// Using your fine-tuned ball area parameters
 			if area > 100 && area < 2000 {
 				rect := gocv.BoundingRect(contour)
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
 				if aspectRatio > 0.5 && aspectRatio < 1.5 {
-					// Increment our ball tally
 					ballsTrackedCount++
 
 					centerX := rect.Min.X + (rect.Dx() / 2)
@@ -158,70 +139,162 @@ func main() {
 					// ==========================================
 					// PART 3: COLLISION/TOUCH DETECTION
 					// ==========================================
-					ballColor := greenColor // Default to safe green
 					frameWidth := img.Cols()
 					inRed := false
-
-					// Check if this specific ball falls inside any red zone
 					for _, zone := range redZones {
 						if zone.Dx() > int(float32(frameWidth)*0.8) {
 							continue
 						}
 						if ballCenter.In(zone) {
-							ballColor = yellowColor // Change tracking circle to yellow inside localized red zones
 							anyBallInRedZone = true
 							inRed = true
 							break
 						}
 					}
 
-					balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed})
+					// Classify as orange if its centre pixel is inside the orange mask.
+					isOrange := false
+					if centerX >= 0 && centerX < orangeMask.Cols() &&
+						centerY >= 0 && centerY < orangeMask.Rows() {
+						if orangeMask.GetUCharAt(centerY, centerX) > 0 {
+							isOrange = true
+						}
+					}
 
-					// Draw the individual tracking circle and tracking dot for THIS ball
-					gocv.Circle(&img, ballCenter, radius, ballColor, 3)
-					gocv.Circle(&img, ballCenter, 4, ballColor, -1)
+					balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
 
-					// Print the unique coordinates for this ball to the terminal log
-					fmt.Printf("[Ball #%d] X: %d, Y: %d\n", ballsTrackedCount, centerX, centerY)
+					// Draw circle — orange balls get a dedicated colour.
+					drawColor := greenColor
+					if inRed {
+						drawColor = yellowColor
+					} else if isOrange {
+						drawColor = orangeColor
+					}
+					gocv.Circle(&img, ballCenter, radius, drawColor, 3)
+					gocv.Circle(&img, ballCenter, 4, drawColor, -1)
+
+					fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
 				}
 			}
 		}
 		ballContours.Close()
 
 		// ==========================================
-		// PART 4: NAVIGATION
+		// PART 4: COLLECTION STATE MACHINE
 		// ==========================================
-
-		// Link to the physical robot. Set ROBOT_ADDR to the EV3's "ip:port"
-		target := PickNextBall(robot, balls)
+		//
+		//  PhasePickBall
+		//    Navigate to the next ball (orange first for VIP bonus).
+		//    On Arrived → transition to PhaseDeliverGoal.
+		//
+		//  PhaseDeliverGoal
+		//    Navigate to the goal marker centre.
+		//    On Arrived → increment delivered count; if all done → PhaseDone;
+		//                 else back to PhasePickBall.
+		//
+		//  PhaseDone
+		//    Stop all movement.
+		//
 		var cmd DriveCommand
-		if target != nil {
+		var navTarget *Ball // used only in PhasePickBall for debug overlay
+
+		switch state.Phase {
+
+		case PhasePickBall:
+			if state.BallsCollected >= state.TotalBalls {
+				// Sanity check: all balls already counted, skip to done.
+				state.Phase = PhaseDone
+				break
+			}
+
+			target := PickNextBall(robot, balls, state.OrangeDelivered)
+			navTarget = target
+
+			if target == nil {
+				// No reachable ball visible — hold still.
+				robotLink.Stop()
+				break
+			}
+
 			var navErr error
 			cmd, navErr = nav.NextCommand(robot, *target)
-			if navErr == nil {
-				// Actually drive the robot toward the ball.
-				robotLink.Send(cmd)
+			if navErr != nil {
+				robotLink.Stop()
+				break
+			}
 
-				if !cmd.Arrived {
-					// Draw navigation arrow from robot toward target
-					start, end := ArrowPoints(robot.Center, target.Center, 60)
-					gocv.Line(&img, start, end, cyanColor, 2)
+			if cmd.Arrived {
+				// Ball collected — record whether it was the orange VIP ball.
+				if target.IsOrange {
+					state.CarryingOrange = true
+				}
+				// Switch to delivery phase.
+				state.Phase = PhaseDeliverGoal
+				fmt.Printf("[FSM] Ball collected (orange=%v). Delivering to goal.\n", state.CarryingOrange)
+			} else {
+				robotLink.Send(cmd)
+				// Draw navigation arrow (cyan) toward the ball.
+				start, end := ArrowPoints(robot.Center, target.Center, 60)
+				gocv.Line(&img, start, end, cyanColor, 2)
+			}
+
+		case PhaseDeliverGoal:
+			if !goal.Detected {
+				// Goal marker not visible — keep still and wait for it to appear.
+				robotLink.Stop()
+				gocv.PutText(&img, "WAITING FOR GOAL MARKER", image.Pt(20, 100),
+					gocv.FontHersheySimplex, 0.7, magentaColor, 2)
+				break
+			}
+
+			var navErr error
+			cmd, navErr = nav.NextCommandToPoint(robot, goal.Center)
+			if navErr != nil {
+				robotLink.Stop()
+				break
+			}
+
+			if cmd.Arrived {
+				// Ball deposited at goal.
+				state.BallsCollected++
+				if state.CarryingOrange {
+					state.OrangeDelivered = true
+					state.CarryingOrange = false
+				}
+				fmt.Printf("[FSM] Delivered. Total: %d/%d\n", state.BallsCollected, state.TotalBalls)
+
+				if state.BallsCollected >= state.TotalBalls {
+					state.Phase = PhaseDone
+					fmt.Println("[FSM] All balls delivered! Stopping.")
+				} else {
+					state.Phase = PhasePickBall
 				}
 			} else {
-				robotLink.Stop()
+				robotLink.Send(cmd)
+				// Draw navigation arrow (magenta) toward the goal.
+				start, end := ArrowPoints(robot.Center, goal.Center, 60)
+				gocv.Line(&img, start, end, magentaColor, 2)
 			}
-		} else {
-			// No reachable ball (or robot not detected) — make sure we don't keep moving.
+
+		case PhaseDone:
 			robotLink.Stop()
 		}
 
 		// ==========================================
 		// PART 5: DISPLAY SYSTEM GLOBAL STATUS
 		// ==========================================
-		statusText := fmt.Sprintf("Balls Detected: %d/11", ballsTrackedCount)
+		phaseStr := map[Phase]string{
+			PhasePickBall:    "PICK",
+			PhaseDeliverGoal: "DELIVER",
+			PhaseDone:        "DONE",
+		}[state.Phase]
+
+		statusText := fmt.Sprintf("Balls: %d/11 | Phase: %s | Delivered: %d",
+			ballsTrackedCount, phaseStr, state.BallsCollected)
 
 		if robot.Detected {
-			statusText += fmt.Sprintf(" | Robot: (%d,%d) Heading: %.0f°", robot.Center.X, robot.Center.Y, robot.Angle)
+			statusText += fmt.Sprintf(" | Robot: (%d,%d) %.0f\u00b0",
+				robot.Center.X, robot.Center.Y, robot.Angle)
 		} else {
 			statusText += " | Robot: NOT FOUND"
 		}
@@ -233,20 +306,19 @@ func main() {
 
 		globalColor := greenColor
 		if anyBallInRedZone {
-			statusText += " | Warning: Ball in Red"
+			statusText += " | Ball in Red Zone"
 			globalColor = yellowColor
 		}
+		if state.Phase == PhaseDone {
+			globalColor = magentaColor
+		}
 
-		// Navigation debug line
-		navText := DebugNavigation(robot, target, cmd)
+		navText := DebugNavigation(robot, navTarget, cmd)
 
-		// Draw real-time global tracking diagnostics text onto the frame
-		gocv.PutText(&img, statusText, image.Pt(20, 40), gocv.FontHersheySimplex, 0.7, globalColor, 2)
-		gocv.PutText(&img, navText, image.Pt(20, 70), gocv.FontHersheySimplex, 0.6, cyanColor, 2)
+		gocv.PutText(&img, statusText, image.Pt(20, 40), gocv.FontHersheySimplex, 0.6, globalColor, 2)
+		gocv.PutText(&img, navText, image.Pt(20, 70), gocv.FontHersheySimplex, 0.55, cyanColor, 2)
 
-		// Show the master combined tracking view
 		window.IMShow(img)
-
 		if window.WaitKey(1) >= 0 {
 			break
 		}
