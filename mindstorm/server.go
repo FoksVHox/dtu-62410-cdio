@@ -20,8 +20,8 @@ import (
 //
 //	"<throttle> <turn>\n"   e.g. "0.500 -0.200\n"  (values in [-1, 1])
 //	"STOP\n"                halt the belts
-//	"LATCH_OPEN\n"          fire the back motor to open the ball-release latch
-//	"LATCH_CLOSE\n"         stop the back motor (close the latch)
+//	"LATCH_OPEN\n"          fire the back motor forward to open the ball-release latch
+//	"LATCH_CLOSE\n"         drive the back motor in reverse to retract/close the latch
 //
 // A watchdog stops the belts automatically if no command is received within
 // CommandTimeout, so the robot never runs away when the link drops.
@@ -106,13 +106,13 @@ func (s *CommandServer) applyLine(line string) {
 		return
 	}
 
-	// LATCH_OPEN: stop the belts then fire the back motor to release balls.
+	// LATCH_OPEN: stop the belts then drive the back motor forward to release balls.
 	if strings.EqualFold(line, "LATCH_OPEN") {
 		s.openLatch()
 		return
 	}
 
-	// LATCH_CLOSE: stop the back motor immediately.
+	// LATCH_CLOSE: drive the back motor in reverse to physically retract the latch.
 	if strings.EqualFold(line, "LATCH_CLOSE") {
 		s.closeLatch()
 		return
@@ -141,10 +141,8 @@ func (s *CommandServer) applyLine(line string) {
 	s.mu.Unlock()
 }
 
-// openLatch stops the belts and activates the back motor for the configured
+// openLatch stops the belts and drives the back motor forward for the configured
 // latch-open duration so the harvested balls are released into the goal.
-// The PC-side FSM also sends LATCH_CLOSE after 8 seconds, but RunTimed provides
-// a hardware safety net in case the close command is ever lost.
 func (s *CommandServer) openLatch() {
 	log.Info("mindstorm: LATCH_OPEN received — stopping belts and opening latch")
 	s.stop()
@@ -158,29 +156,46 @@ func (s *CommandServer) openLatch() {
 	backSpeed := int(float64(s.back.MaxSpeedTPS()) * motorCfg.Back.Speed)
 	latchDurationMS := int(motorCfg.LatchOpenTime.Milliseconds())
 	if latchDurationMS <= 0 {
-		// Fallback: 8 seconds if config value is missing / zero.
-		latchDurationMS = 8000
+		// Fallback: 2 seconds if config value is missing / zero.
+		latchDurationMS = 2000
 	}
 
 	log.WithFields(log.Fields{
 		"speed_tps":   backSpeed,
 		"duration_ms": latchDurationMS,
-	}).Info("mindstorm: firing back motor (latch open)")
+	}).Info("mindstorm: firing back motor forward (latch open)")
 
 	if err := s.back.RunTimed(backSpeed, latchDurationMS); err != nil {
 		log.WithError(err).Error("mindstorm: failed to fire back motor for latch open")
 	}
 }
 
-// closeLatch stops the back motor immediately (brake).
+// closeLatch drives the back motor in reverse for the configured close duration
+// to physically retract the latch back to its resting position.
 func (s *CommandServer) closeLatch() {
-	log.Info("mindstorm: LATCH_CLOSE received — stopping back motor")
+	log.Info("mindstorm: LATCH_CLOSE received — driving back motor in reverse to retract latch")
+
 	if s.back == nil {
 		log.Warn("mindstorm: back motor not configured, cannot close latch")
 		return
 	}
-	if err := s.back.Stop("brake"); err != nil {
-		log.WithError(err).Error("mindstorm: failed to stop back motor for latch close")
+
+	motorCfg := config.Get().Mindstorm.Motors
+	// Reverse speed: negate to drive the motor in the opposite direction.
+	backSpeed := -int(float64(s.back.MaxSpeedTPS()) * motorCfg.Back.Speed)
+	latchDurationMS := int(motorCfg.LatchCloseTime.Milliseconds())
+	if latchDurationMS <= 0 {
+		// Fallback: 2 seconds if config value is missing / zero.
+		latchDurationMS = 2000
+	}
+
+	log.WithFields(log.Fields{
+		"speed_tps":   backSpeed,
+		"duration_ms": latchDurationMS,
+	}).Info("mindstorm: driving back motor in reverse (latch close)")
+
+	if err := s.back.RunTimed(backSpeed, latchDurationMS); err != nil {
+		log.WithError(err).Error("mindstorm: failed to drive back motor in reverse for latch close")
 	}
 }
 
