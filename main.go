@@ -44,7 +44,7 @@ const deliverBackupSpeed = 0.40
 const deliverGoalArrivalPx = 70.0
 
 // deliverLatchOpenDuration is how long the latch stays open before being closed.
-const deliverLatchOpenDuration = 8 * time.Second
+const deliverLatchOpenDuration = 2 * time.Second
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
@@ -311,7 +311,7 @@ func main() {
 					lockedTarget = nil // release lock so next ball is chosen fresh
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubTurn180 // reset delivery sub-FSM
-					nav = NewNavigator()                   // fresh navigator for delivery
+					nav = NewNavigator()                  // fresh navigator for delivery
 					state.Phase = PhaseDeliverGoal
 					break
 				}
