@@ -311,14 +311,14 @@ func main() {
 			} else {
 				robotLink.Send(cmd)
 				start, end := ArrowPoints(robot.Center, target.Center, 60)
-				gocv.Line(&img, start, end, cyanColor, 2)
+				gocv.Line(&img, start, end, cyanColor, 1)
 			}
 
 		case PhaseDeliverGoal:
 			if !goal.Detected {
 				robotLink.Stop()
 				gocv.PutText(&img, "WAITING FOR GOAL MARKER", image.Pt(20, 100),
-					gocv.FontHersheySimplex, 0.7, magentaColor, 2)
+					gocv.FontHersheySimplex, 0.7, magentaColor, 1)
 				break
 			}
 
@@ -358,7 +358,7 @@ func main() {
 		// ==========================================
 		if navTarget != nil {
 			targetRadius := 14
-			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 2)
+			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 1)
 			gocv.Circle(&img, navTarget.Center, 5, targetColor, -1)
 			gocv.PutText(&img, "TARGET",
 				image.Pt(navTarget.Center.X+targetRadius+4, navTarget.Center.Y+5),
