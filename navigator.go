@@ -17,6 +17,10 @@ type Navigator struct {
 	TurnThreshold float64
 	// ArrivedRadius is the pixel distance at which we consider the ball collected.
 	ArrivedRadius float64
+	// GoalArrivedRadius is the pixel distance at which we consider the robot
+	// close enough to the goal to release the ball(s). Larger than ArrivedRadius
+	// so the robot doesn't ram the goal marker.
+	GoalArrivedRadius float64
 	// DriveSpeed is the base throttle in the range [0, 1] used while moving forward.
 	DriveSpeed float64
 	// TurnSpeed is the turn magnitude in the range [0, 1] used while rotating in place.
@@ -36,10 +40,11 @@ type DriveCommand struct {
 // NewNavigator creates a Navigator with sensible defaults.
 func NewNavigator() *Navigator {
 	return &Navigator{
-		TurnThreshold: 10.0, // degrees
-		ArrivedRadius: 30.0, // pixels
-		DriveSpeed:    0.5,
-		TurnSpeed:     0.4,
+		TurnThreshold:     10.0, // degrees
+		ArrivedRadius:     30.0, // pixels — ball collection
+		GoalArrivedRadius: 60.0, // pixels — goal deposit (stop before hitting the marker)
+		DriveSpeed:        0.5,
+		TurnSpeed:         0.4,
 	}
 }
 
@@ -50,16 +55,30 @@ func NewNavigator() *Navigator {
 //
 // Returns (DriveCommand, nil) on success, or (zero, error) if the robot is not detected.
 func (n *Navigator) NextCommand(robot RobotState, target Ball) (DriveCommand, error) {
+	return n.navigateTo(robot, target.Center, n.ArrivedRadius)
+}
+
+// NextCommandToPoint computes the drive command to reach an arbitrary pixel-space
+// point (e.g. the goal marker centre). Uses GoalArrivedRadius so the robot stops
+// before physically colliding with the goal marker.
+//
+// Returns (DriveCommand, nil) on success, or (zero, error) if the robot is not detected.
+func (n *Navigator) NextCommandToPoint(robot RobotState, target image.Point) (DriveCommand, error) {
+	return n.navigateTo(robot, target, n.GoalArrivedRadius)
+}
+
+// navigateTo is the shared steering core used by both NextCommand and NextCommandToPoint.
+func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadius float64) (DriveCommand, error) {
 	if !robot.Detected {
 		return DriveCommand{}, fmt.Errorf("navigator: robot not detected")
 	}
 
 	// --- 1. Distance to target ---
-	dx := float64(target.Center.X - robot.Center.X)
-	dy := float64(target.Center.Y - robot.Center.Y)
+	dx := float64(target.X - robot.Center.X)
+	dy := float64(target.Y - robot.Center.Y)
 	dist := math.Sqrt(dx*dx + dy*dy)
 
-	if dist <= n.ArrivedRadius {
+	if dist <= arrivedRadius {
 		return DriveCommand{Arrived: true}, nil
 	}
 
@@ -96,12 +115,27 @@ func (n *Navigator) NextCommand(robot RobotState, target Ball) (DriveCommand, er
 	return DriveCommand{Throttle: n.DriveSpeed, Turn: correction}, nil
 }
 
-// PickNextBall selects the nearest ball from the provided slice that is NOT in a red zone.
-// Returns nil if the slice is empty or all balls are in red zones.
-func PickNextBall(robot RobotState, balls []Ball) *Ball {
+// PickNextBall selects the best ball to collect next:
+//   - If an orange (VIP) ball exists and has not yet been delivered, it is
+//     always returned first regardless of distance (bonus 200 pts).
+//   - Otherwise the nearest reachable (non-red-zone) ball is returned.
+//
+// Returns nil if no reachable ball is available.
+func PickNextBall(robot RobotState, balls []Ball, orangeDelivered bool) *Ball {
 	if !robot.Detected || len(balls) == 0 {
 		return nil
 	}
+
+	// If the orange ball hasn't been delivered yet, always go for it first.
+	if !orangeDelivered {
+		for i := range balls {
+			if balls[i].IsOrange && !balls[i].InRedZone {
+				return &balls[i]
+			}
+		}
+	}
+
+	// Fallback: nearest non-red-zone ball.
 	var best *Ball
 	bestDist := math.MaxFloat64
 	for i := range balls {
@@ -131,7 +165,7 @@ func normaliseAngle(a float64) float64 {
 	return a
 }
 
-// DebugString returns a human-readable summary of the navigation state for overlay text.
+// DebugNavigation returns a human-readable summary of the navigation state for overlay text.
 func DebugNavigation(robot RobotState, target *Ball, cmd DriveCommand) string {
 	if !robot.Detected {
 		return "NAV: robot not found"
@@ -145,11 +179,11 @@ func DebugNavigation(robot RobotState, target *Ball, cmd DriveCommand) string {
 	if cmd.Arrived {
 		return fmt.Sprintf("NAV: ARRIVED at (%d,%d)", target.Center.X, target.Center.Y)
 	}
-	return fmt.Sprintf("NAV: dist=%.0fpx heading=%.0f° thr=%.2f turn=%.2f",
+	return fmt.Sprintf("NAV: dist=%.0fpx heading=%.0f\u00b0 thr=%.2f turn=%.2f",
 		dist, robot.Angle, cmd.Throttle, cmd.Turn)
 }
 
-// TargetArrow draws a directional arrow from the robot toward its target
+// ArrowPoints draws a directional arrow from the robot toward its target
 // on an image (useful for debug overlay). Uses only stdlib image.Point.
 func ArrowPoints(from, to image.Point, length float64) (image.Point, image.Point) {
 	dx := float64(to.X - from.X)
