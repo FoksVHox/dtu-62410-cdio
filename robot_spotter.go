@@ -12,7 +12,8 @@ import (
 type RobotState struct {
 	Detected bool
 	Center   image.Point
-	Angle    float64 // Facing direction in degrees (0 to 360)
+	Angle    float64        // Facing direction in degrees (0 to 360)
+	Box      image.Rectangle // Bounding rectangle of the ArUco marker (used to exclude false-positive ball detections inside the purple square)
 }
 
 // RobotSpotter manages the ArUco tracking state.
@@ -76,11 +77,29 @@ func (rs *RobotSpotter) TrackRobot(frame *gocv.Mat) RobotState {
 
 	// Center of marker.
 	var sumX, sumY float32
+	minX, minY := int(markerCorners[0].X), int(markerCorners[0].Y)
+	maxX, maxY := minX, minY
 	for _, pt := range markerCorners {
 		sumX += float32(pt.X)
 		sumY += float32(pt.Y)
+		if int(pt.X) < minX {
+			minX = int(pt.X)
+		}
+		if int(pt.X) > maxX {
+			maxX = int(pt.X)
+		}
+		if int(pt.Y) < minY {
+			minY = int(pt.Y)
+		}
+		if int(pt.Y) > maxY {
+			maxY = int(pt.Y)
+		}
 	}
 	robot.Center = image.Pt(int(sumX/4), int(sumY/4))
+
+	// Store bounding box with a small padding so the full purple square is covered.
+	const boxPad = 10
+	robot.Box = image.Rect(minX-boxPad, minY-boxPad, maxX+boxPad, maxY+boxPad)
 
 	// Heading from corner 3 -> corner 0.
 	pFront := markerCorners[0]
