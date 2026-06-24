@@ -44,6 +44,9 @@ type Navigator struct {
 	TurnSpeed float64
 	// SteerGain scales the proportional steering correction while driving.
 	SteerGain float64
+	// TargetJitterPx is the pixel distance below which a target position
+	// change is treated as vision noise and ignored (no COARSE_ALIGN reset).
+	TargetJitterPx float64
 
 	// internal state
 	driving      bool
@@ -66,15 +69,16 @@ type DriveCommand struct {
 // NewNavigator creates a Navigator with tuned defaults.
 func NewNavigator() *Navigator {
 	return &Navigator{
-		CoarseAlignDeg:    15.0, // proportional ramp reaches TurnSpeed at 15°
-		DeadBandDeg:       7.0,  // enter DRIVE once within 3° — tight but stable
-		ReAlignDeg:        20.0, // stop driving and realign if drift exceeds 20°
+		CoarseAlignDeg:    15.0,
+		DeadBandDeg:       7.0,
+		ReAlignDeg:        20.0,
 		FineAlignDist:     80.0,
 		ArrivedRadius:     30.0,
 		GoalArrivedRadius: 60.0,
 		DriveSpeed:        0.5,
 		TurnSpeed:         0.4,
 		SteerGain:         0.025,
+		TargetJitterPx:    8.0, // ignore target shifts smaller than 8px
 	}
 }
 
@@ -95,14 +99,30 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	}
 
 	// --- 0. Detect target change and reset state ---
-	if !n.targetInited || target.X != n.lastTargetX || target.Y != n.lastTargetY {
-		fmt.Printf("[NAV] TARGET CHANGED (%d,%d) -> (%d,%d) — reset to COARSE_ALIGN\n",
-			n.lastTargetX, n.lastTargetY, target.X, target.Y)
+	// Only reset if the target has moved more than TargetJitterPx pixels;
+	// smaller shifts are vision noise and should not disrupt alignment.
+	if !n.targetInited {
+		fmt.Printf("[NAV] TARGET INIT -> (%d,%d) — reset to COARSE_ALIGN\n", target.X, target.Y)
 		n.driving = false
 		n.turnSign = 0
 		n.lastTargetX = target.X
 		n.lastTargetY = target.Y
 		n.targetInited = true
+	} else {
+		dtx := float64(target.X - n.lastTargetX)
+		dty := float64(target.Y - n.lastTargetY)
+		shift := math.Sqrt(dtx*dtx + dty*dty)
+		if shift > n.TargetJitterPx {
+			fmt.Printf("[NAV] TARGET CHANGED (%d,%d) -> (%d,%d) shift=%.1fpx — reset to COARSE_ALIGN\n",
+				n.lastTargetX, n.lastTargetY, target.X, target.Y, shift)
+			n.driving = false
+			n.turnSign = 0
+			n.lastTargetX = target.X
+			n.lastTargetY = target.Y
+		}
+		// Small jitter: silently update stored position but don't reset state.
+		n.lastTargetX = target.X
+		n.lastTargetY = target.Y
 	}
 
 	// --- 1. Distance to target ---
@@ -124,9 +144,6 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	}
 
 	// --- 3. Heading error in (-180, 180] ---
-	// normaliseAngle always gives the SHORTEST path, so its sign on the very
-	// first call is the correct turn direction. We lock that sign for the
-	// entire coarse-align phase so the ±180° boundary never flips us.
 	rawErr := normaliseAngle(bearingDeg - robot.Angle)
 	absErr := math.Abs(rawErr)
 
@@ -138,7 +155,6 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 			n.turnSign = 0
 		}
 	} else {
-		// Lock turn direction on first frame of coarse-align.
 		if n.turnSign == 0 && rawErr != 0 {
 			n.turnSign = math.Copysign(1, rawErr)
 			fmt.Printf("[NAV] COARSE_ALIGN locked turnSign=%.0f (rawErr=%.2f°)\n", n.turnSign, rawErr)
@@ -157,8 +173,6 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	}
 
 	// --- 5a. COARSE ALIGN — turn in place, zero forward throttle ---
-	// Magnitude tapers proportionally to zero as absErr → 0.
-	// Direction is n.turnSign (locked) — never reads rawErr sign again.
 	if !n.driving {
 		norm := math.Min(absErr/n.CoarseAlignDeg, 1.0)
 		mag := n.TurnSpeed * norm

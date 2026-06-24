@@ -68,6 +68,12 @@ func main() {
 	var phantomOrange bool     // was the latched ball orange?
 	phantomActive := false
 
+	// lockedTarget is the ball the robot is currently committed to collecting.
+	// It is set when a ball is first selected and cleared only when the phantom
+	// latch fires (i.e. the ball is collected). This prevents PickNextBall from
+	// switching targets mid-approach as distances change.
+	var lockedTarget *Ball
+
 	hsv := gocv.NewMat()
 	defer hsv.Close()
 	mask1 := gocv.NewMat()
@@ -275,25 +281,18 @@ func main() {
 			}
 
 			// ---- PHANTOM LATCH CHECK ----
-			// Drive straight forward at a fixed throttle for phantomDuration.
-			// We do NOT re-invoke the navigator here — the robot is already past
-			// ArrivedRadius so the navigator would return Arrived immediately and
-			// produce zero throttle, stalling the pickup.
 			if phantomActive {
 				if now.After(phantomUntil) {
-					// Latch expired — ball should be inside harvester now.
 					fmt.Printf("[FSM] Phantom latch expired. Ball collected (orange=%v). Delivering to goal.\n", phantomOrange)
 					if phantomOrange {
 						state.CarryingOrange = true
 					}
 					phantomActive = false
-					// FIX 3: explicitly stop before transitioning to deliver phase.
+					lockedTarget = nil // release lock so next ball is chosen fresh
 					robotLink.Stop()
 					state.Phase = PhaseDeliverGoal
 					break
 				}
-				// Still within latch window — push straight forward, no steering.
-				// FIX 2: bypass the smoothing ramp by writing curThr directly.
 				robotLink.ForceThrottle(phantomThrottle)
 				remaining := time.Until(phantomUntil)
 				gocv.PutText(&img,
@@ -302,35 +301,64 @@ func main() {
 				break
 			}
 
-			// ---- NORMAL PICK LOGIC ----
-			target := PickNextBall(robot, balls, state.OrangeDelivered)
-			navTarget = target
+			// ---- BALL SELECTION: pick once and lock ----
+			// If we have no locked target, choose the best ball now.
+			// Once locked, keep driving to the same ball even if a closer one
+			// appears — only release the lock when the ball is collected.
+			if lockedTarget == nil {
+				lockedTarget = PickNextBall(robot, balls, state.OrangeDelivered)
+				if lockedTarget != nil {
+					fmt.Printf("[FSM] Locked onto ball at (%d,%d) orange=%v\n",
+						lockedTarget.Center.X, lockedTarget.Center.Y, lockedTarget.IsOrange)
+					// Reset navigator so it starts fresh for this target.
+					nav = NewNavigator()
+				}
+			} else {
+				// Re-match the locked target to the current frame's ball list
+				// so we track its latest pixel position (it may drift slightly).
+				// Use stationaryRadius as the match tolerance.
+				const lockMatchPx = 30.0
+				var refreshed *Ball
+				for i := range balls {
+					dx := float64(balls[i].Center.X - lockedTarget.Center.X)
+					dy := float64(balls[i].Center.Y - lockedTarget.Center.Y)
+					if math.Sqrt(dx*dx+dy*dy) <= lockMatchPx {
+						refreshed = &balls[i]
+						break
+					}
+				}
+				if refreshed != nil {
+					lockedTarget = refreshed
+				}
+				// If the locked ball has vanished from the frame entirely
+				// (refreshed == nil) keep the last known position — the navigator
+				// will drive toward it and the phantom latch will fire on arrival.
+			}
 
-			if target == nil {
+			navTarget = lockedTarget
+
+			if navTarget == nil {
 				robotLink.Stop()
 				break
 			}
 
 			var navErr error
-			cmd, navErr = nav.NextCommand(robot, *target)
+			cmd, navErr = nav.NextCommand(robot, *navTarget)
 			if navErr != nil {
 				robotLink.Stop()
 				break
 			}
 
 			if cmd.Arrived {
-				// Ball reached ArrivedRadius — start phantom latch.
 				phantomActive = true
 				phantomUntil = now.Add(phantomDuration)
-				phantomOrange = target.IsOrange
+				phantomOrange = navTarget.IsOrange
 				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms straight-drive phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
-				// FIX 1: send the first phantom command on this same frame so
-				// the robot doesn't coast for one cycle with no command.
 				robotLink.ForceThrottle(phantomThrottle)
 			} else {
 				robotLink.Send(cmd)
-				start, end := ArrowPoints(robot.Center, target.Center, 60)
+				start, end := ArrowPoints(robot.Center, navTarget.Center, 60)
 				gocv.Line(&img, start, end, cyanColor, 1)
 			}
 
