@@ -20,7 +20,7 @@ type ballSighting struct {
 // stationaryThreshold is how long a detection must remain still before being
 // treated as a real ball. This filters out moving reflections from the spinning
 // front mechanism.
-const stationaryThreshold = 1500 * time.Millisecond
+const stationaryThreshold = 500 * time.Millisecond
 
 // stationaryRadius is the pixel tolerance for considering two detections the
 // same stationary position across frames.
