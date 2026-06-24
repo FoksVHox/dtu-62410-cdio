@@ -44,20 +44,43 @@ func NewRobotLink(addr string) *RobotLink {
 		minPause: 80 * time.Millisecond,
 	}
 	if rl.enabled {
-		rl.dial()
+		rl.dialWithRetry()
 	}
 	return rl
 }
 
-func (rl *RobotLink) dial() {
-	conn, err := net.DialTimeout("tcp", rl.addr, 2*time.Second)
-	if err != nil {
-		fmt.Printf("[RobotLink] could not connect to %s: %v (running without motors)\n", rl.addr, err)
-		rl.conn = nil
-		return
+// dialWithRetry keeps trying to connect to the robot until it succeeds.
+// It blocks the caller, so it should only be called from NewRobotLink (at
+// startup) or from a goroutine when reconnecting after a dropped connection.
+func (rl *RobotLink) dialWithRetry() {
+	const retryInterval = 2 * time.Second
+	attempt := 0
+	for {
+		attempt++
+		conn, err := net.DialTimeout("tcp", rl.addr, 2*time.Second)
+		if err == nil {
+			fmt.Printf("[RobotLink] connected to robot at %s (attempt %d)\n", rl.addr, attempt)
+			rl.conn = conn
+			return
+		}
+		fmt.Printf("[RobotLink] could not connect to %s (attempt %d): %v — retrying in %s\n",
+			rl.addr, attempt, err, retryInterval)
+		time.Sleep(retryInterval)
 	}
-	fmt.Printf("[RobotLink] connected to robot at %s\n", rl.addr)
-	rl.conn = conn
+}
+
+// reconnectAsync closes the current (dead) connection and spawns a background
+// goroutine that retries until the robot is reachable again.
+func (rl *RobotLink) reconnectAsync() {
+	if rl.conn != nil {
+		_ = rl.conn.Close()
+		rl.conn = nil
+	}
+	go func() {
+		rl.mu.Lock()
+		rl.dialWithRetry()
+		rl.mu.Unlock()
+	}()
 }
 
 // Send applies smoothing/rate-limiting and forwards the command to the robot.
@@ -86,21 +109,14 @@ func (rl *RobotLink) Send(cmd DriveCommand) {
 	}
 
 	if !rl.enabled || rl.conn == nil {
-		// Simulation mode: just show what we would send.
+		// Simulation mode or still reconnecting: just show what we would send.
 		fmt.Printf("[RobotLink:SIM] %s", line)
-		if !rl.enabled {
-			return
-		}
-		// Try to (re)connect for next time.
-		rl.dial()
 		return
 	}
 
 	if _, err := rl.conn.Write([]byte(line)); err != nil {
 		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
-		_ = rl.conn.Close()
-		rl.conn = nil
-		rl.dial()
+		rl.reconnectAsync()
 	}
 }
 
