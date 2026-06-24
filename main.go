@@ -59,9 +59,10 @@ func main() {
 
 	// Phantom latch — keeps the last-known ball position alive for phantomDuration
 	// after the ball disappears under the harvester.
-	var phantomTarget *Ball      // non-nil while latch is active
-	var phantomUntil time.Time   // latch expires at this time
-	var phantomOrange bool       // was the latched ball orange?
+
+	var phantomTarget *Ball    // non-nil while latch is active
+	var phantomUntil time.Time // latch expires at this time
+	var phantomOrange bool     // was the latched ball orange?
 
 	hsv := gocv.NewMat()
 	defer hsv.Close()
@@ -83,14 +84,14 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor    := color.RGBA{255, 0, 0, 0}
-	greenColor   := color.RGBA{0, 255, 0, 0}
-	yellowColor  := color.RGBA{0, 255, 255, 0}
-	cyanColor    := color.RGBA{255, 255, 0, 0}
-	orangeColor  := color.RGBA{0, 165, 255, 0}
+	blueColor := color.RGBA{255, 0, 0, 0}
+	greenColor := color.RGBA{0, 255, 0, 0}
+	yellowColor := color.RGBA{0, 255, 255, 0}
+	cyanColor := color.RGBA{255, 255, 0, 0}
+	orangeColor := color.RGBA{0, 165, 255, 0}
 	magentaColor := color.RGBA{255, 0, 255, 0}
-	targetColor  := color.RGBA{0, 0, 255, 0}
-	grayColor    := color.RGBA{160, 160, 160, 0}
+	targetColor := color.RGBA{0, 0, 255, 0}
+	grayColor := color.RGBA{160, 160, 160, 0}
 
 	sightings := make(map[image.Point]*ballSighting)
 
@@ -105,7 +106,7 @@ func main() {
 		now := time.Now()
 
 		robot := robotSpotter.TrackRobot(&img)
-		goal  := goalSpotter.TrackGoal(&img)
+		goal := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
 		// PART 1: RED ZONES & ORANGE MASK
@@ -326,7 +327,7 @@ func main() {
 				// Ball reached ArrivedRadius — start phantom latch instead of
 				// transitioning immediately. The ball may already be disappearing.
 				phantomTarget = target
-				phantomUntil  = now.Add(phantomDuration)
+				phantomUntil = now.Add(phantomDuration)
 				phantomOrange = target.IsOrange
 				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
