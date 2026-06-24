@@ -21,9 +21,13 @@ type ballSighting struct {
 // same stationary position across frames.
 const stationaryRadius = 15
 
-// phantomDuration is how long we keep driving toward a ball's last-known
-// position after it disappears under the harvester.
+// phantomDuration is how long we keep driving forward after the ball
+// disappears under the harvester.
 const phantomDuration = 1500 * time.Millisecond
+
+// phantomThrottle is the forward speed used during the phantom latch burst.
+// Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
+const phantomThrottle = 0.55
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
@@ -57,12 +61,12 @@ func main() {
 
 	state := NewCollectionState()
 
-	// Phantom latch — keeps the last-known ball position alive for phantomDuration
-	// after the ball disappears under the harvester.
-
-	var phantomTarget *Ball    // non-nil while latch is active
-	var phantomUntil time.Time // latch expires at this time
+	// Phantom latch — after the ball disappears under the harvester, we drive
+	// straight forward at phantomThrottle for phantomDuration instead of
+	// re-running the navigator (which would immediately report Arrived and stop).
+	var phantomUntil time.Time // non-zero while latch is active
 	var phantomOrange bool     // was the latched ball orange?
+	phantomActive := false
 
 	hsv := gocv.NewMat()
 	defer hsv.Close()
@@ -158,11 +162,11 @@ func main() {
 			contour := ballContours.At(i)
 			area := gocv.ContourArea(contour)
 
-			if area > 100 && area < 2000 {
+			if area > 100 && area < 600 {
 				rect := gocv.BoundingRect(contour)
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
-				if aspectRatio > 0.5 && aspectRatio < 1.5 {
+				if aspectRatio > 0.55 && aspectRatio < 1.5 {
 					centerX := rect.Min.X + (rect.Dx() / 2)
 					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
@@ -271,38 +275,27 @@ func main() {
 			}
 
 			// ---- PHANTOM LATCH CHECK ----
-			// If a latch is active, keep driving toward the phantom position
-			// until the timer expires, then transition to deliver.
-			if phantomTarget != nil {
+			// Drive straight forward at a fixed throttle for phantomDuration.
+			// We do NOT re-invoke the navigator here — the robot is already past
+			// ArrivedRadius so the navigator would return Arrived immediately and
+			// produce zero throttle, stalling the pickup.
+			if phantomActive {
 				if now.After(phantomUntil) {
 					// Latch expired — ball should be inside harvester now.
 					fmt.Printf("[FSM] Phantom latch expired. Ball collected (orange=%v). Delivering to goal.\n", phantomOrange)
 					if phantomOrange {
 						state.CarryingOrange = true
 					}
-					phantomTarget = nil
+					phantomActive = false
 					state.Phase = PhaseDeliverGoal
 					break
 				}
-				// Still within latch window — drive straight toward phantom.
-				navTarget = phantomTarget
-				var navErr error
-				cmd, navErr = nav.NextCommand(robot, *phantomTarget)
-				if navErr != nil {
-					robotLink.Stop()
-					break
-				}
-				// Override arrived — don't stop early during latch.
-				cmd.Arrived = false
-				// Drive with a fixed forward throttle so the robot pushes through.
-				if cmd.Throttle == 0 {
-					cmd.Throttle = nav.DriveSpeed
-				}
+				// Still within latch window — push straight forward, no steering.
+				remaining := time.Until(phantomUntil)
+				cmd = DriveCommand{Throttle: phantomThrottle, Turn: 0, Arrived: false}
 				robotLink.Send(cmd)
-				start, end := ArrowPoints(robot.Center, phantomTarget.Center, 60)
-				gocv.Line(&img, start, end, cyanColor, 1)
 				gocv.PutText(&img,
-					fmt.Sprintf("PHANTOM %.1fs", time.Until(phantomUntil).Seconds()),
+					fmt.Sprintf("PHANTOM %.1fs", remaining.Seconds()),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, targetColor, 2)
 				break
 			}
@@ -324,26 +317,15 @@ func main() {
 			}
 
 			if cmd.Arrived {
-				// Ball reached ArrivedRadius — start phantom latch instead of
-				// transitioning immediately. The ball may already be disappearing.
-				phantomTarget = target
+				// Ball reached ArrivedRadius — start phantom latch.
+				// The robot will drive straight forward for phantomDuration
+				// to push the ball fully into the harvester.
+				phantomActive = true
 				phantomUntil = now.Add(phantomDuration)
 				phantomOrange = target.IsOrange
-				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms phantom latch.\n",
+				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms straight-drive phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
 			} else {
-				// Normal approach: check if ball just disappeared while close —
-				// if so, also start the latch so we don't stop mid-pickup.
-				if robot.Detected {
-					dx := float64(target.Center.X - robot.Center.X)
-					dy := float64(target.Center.Y - robot.Center.Y)
-					dist := math.Sqrt(dx*dx + dy*dy)
-					if dist < nav.ArrivedRadius*2.5 {
-						// Ball is very close — if it disappears next frame the latch
-						// will already be primed here so we don't stutter.
-						_ = dist // proximity noted; latch triggered on disappearance below
-					}
-				}
 				robotLink.Send(cmd)
 				start, end := ArrowPoints(robot.Center, target.Center, 60)
 				gocv.Line(&img, start, end, cyanColor, 1)
