@@ -21,6 +21,7 @@ type RobotConfig struct {
 type CameraConfig struct {
 	// Device is the OS index of the webcam (0, 1, 2 …).
 	Device int `yaml:"device"`
+	Wait   int `yaml:"wait"`
 }
 
 // LoadConfig reads config.yml from the given path.

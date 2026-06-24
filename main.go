@@ -17,11 +17,6 @@ type ballSighting struct {
 	isOrange  bool
 }
 
-// stationaryThreshold is how long a detection must remain still before being
-// treated as a real ball. This filters out moving reflections from the spinning
-// front mechanism.
-const stationaryThreshold = 500 * time.Millisecond
-
 // stationaryRadius is the pixel tolerance for considering two detections the
 // same stationary position across frames.
 const stationaryRadius = 15
@@ -32,6 +27,11 @@ func main() {
 		fmt.Printf("Error loading config: %v\n", err)
 		return
 	}
+
+	// stationaryThreshold is how long a detection must remain still before being
+	// treated as a real ball. This filters out moving reflections from the spinning
+	// front mechanism.
+	const stationaryThreshold = 500 * time.Millisecond
 
 	webcam, err := gocv.VideoCaptureDevice(cfg.Camera.Device)
 	if err != nil {
@@ -360,9 +360,6 @@ func main() {
 			targetRadius := 14
 			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 1)
 			gocv.Circle(&img, navTarget.Center, 5, targetColor, -1)
-			gocv.PutText(&img, "TARGET",
-				image.Pt(navTarget.Center.X+targetRadius+4, navTarget.Center.Y+5),
-				gocv.FontHersheySimplex, 0.45, targetColor, 1)
 		}
 
 		// ==========================================
