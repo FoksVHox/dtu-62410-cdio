@@ -27,7 +27,7 @@ const phantomDuration = 4000 * time.Millisecond
 
 // phantomThrottle is the forward speed used during the phantom latch burst.
 // Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
-const phantomThrottle = 0.65
+const phantomThrottle = 0.55
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
