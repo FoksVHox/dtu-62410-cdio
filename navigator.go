@@ -12,9 +12,14 @@ import (
 // Coordinate system: top-down image, X increases rightward, Y increases downward.
 // Angles are in degrees, clockwise from the positive-X axis (matching RobotSpotter).
 type Navigator struct {
-	// TurnThreshold is the angle error (degrees) below which we stop turning and
-	// drive straight toward the target.
+	// TurnThreshold is the angle error (degrees) below which we consider ourselves
+	// aligned and start driving forward (with a steering correction).
 	TurnThreshold float64
+	// TurnHysteresis adds a dead-band so we don't flip between turn-in-place and
+	// drive mode on every frame. We enter drive mode at TurnThreshold, but only
+	// switch back to turn-in-place mode if the error exceeds
+	// TurnThreshold + TurnHysteresis.
+	TurnHysteresis float64
 	// ArrivedRadius is the pixel distance at which we consider the ball collected.
 	ArrivedRadius float64
 	// GoalArrivedRadius is the pixel distance at which we consider the robot
@@ -23,8 +28,11 @@ type Navigator struct {
 	GoalArrivedRadius float64
 	// DriveSpeed is the base throttle in the range [0, 1] used while moving forward.
 	DriveSpeed float64
-	// TurnSpeed is the turn magnitude in the range [0, 1] used while rotating in place.
+	// TurnSpeed is the maximum turn magnitude in the range [0, 1].
 	TurnSpeed float64
+
+	// internal hysteresis state: true when we are currently in drive mode.
+	driving bool
 }
 
 // DriveCommand is the output of the navigator: a throttle + turn pair for BeltDrive.
@@ -40,11 +48,12 @@ type DriveCommand struct {
 // NewNavigator creates a Navigator with sensible defaults.
 func NewNavigator() *Navigator {
 	return &Navigator{
-		TurnThreshold:     10.0, // degrees
+		TurnThreshold:     15.0, // degrees — enter drive mode when error is below this
+		TurnHysteresis:    10.0, // degrees — extra margin before switching back to turn mode
 		ArrivedRadius:     30.0, // pixels — ball collection
 		GoalArrivedRadius: 60.0, // pixels — goal deposit (stop before hitting the marker)
 		DriveSpeed:        0.5,
-		TurnSpeed:         0.4,
+		TurnSpeed:         0.45,
 	}
 }
 
@@ -79,6 +88,7 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	dist := math.Sqrt(dx*dx + dy*dy)
 
 	if dist <= arrivedRadius {
+		n.driving = false
 		return DriveCommand{Arrived: true}, nil
 	}
 
@@ -96,23 +106,54 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	// Normalise to (-180, 180]
 	headingErr = normaliseAngle(headingErr)
 
-	// --- 4. Build command ---
-	if math.Abs(headingErr) > n.TurnThreshold {
-		// Turn in place toward the target. Scale magnitude with the error so we
-		// spin quickly when badly misaligned and gently when nearly aligned.
-		mag := n.TurnSpeed
-		if a := math.Abs(headingErr); a < 45 {
-			// Ramp down below 45° but keep a minimum so we don't stall.
-			mag = math.Max(n.TurnSpeed*(a/45.0), 0.2)
+	absErr := math.Abs(headingErr)
+
+	// --- 4. Hysteresis: decide whether to drive or turn in place ---
+	//
+	// We enter drive mode when the error drops below TurnThreshold.
+	// We only leave drive mode (back to turn-in-place) when the error
+	// climbs above TurnThreshold + TurnHysteresis.  This prevents the
+	// robot from flip-flopping between the two modes on every frame.
+	if n.driving {
+		if absErr > n.TurnThreshold+n.TurnHysteresis {
+			n.driving = false
+		}
+	} else {
+		if absErr <= n.TurnThreshold {
+			n.driving = true
+		}
+	}
+
+	if !n.driving {
+		// --- 5a. Turn in place toward the target ---
+		//
+		// Use a smooth proportional ramp over the full [0°, 180°] range so the
+		// robot turns fast when badly mis-aligned and slows down gently as it
+		// approaches the desired heading.  A small minimum keeps the motor from
+		// stalling at tiny residual errors.
+		normalised := absErr / 180.0                            // 0..1
+		mag := n.TurnSpeed*normalised*(2.0-normalised) + 0.08  // smooth ease-in, min ~0.08
+		if mag > n.TurnSpeed {
+			mag = n.TurnSpeed
 		}
 		turnDir := math.Copysign(mag, headingErr)
 		return DriveCommand{Throttle: 0, Turn: turnDir}, nil
 	}
 
-	// Aligned enough — drive forward with a proportional steering correction.
-	correction := (headingErr / n.TurnThreshold) * n.TurnSpeed
+	// --- 5b. Drive forward with a proportional steering correction ---
+	//
+	// Scale correction linearly with heading error, clamped to TurnSpeed.
+	// Dividing by (TurnThreshold + TurnHysteresis) gives a softer correction
+	// that stays smooth even near the mode boundary.
+	scale := n.TurnThreshold + n.TurnHysteresis
+	correction := (headingErr / scale) * n.TurnSpeed
 	correction = math.Max(-n.TurnSpeed, math.Min(n.TurnSpeed, correction))
-	return DriveCommand{Throttle: n.DriveSpeed, Turn: correction}, nil
+
+	// Reduce forward speed slightly when the correction is large so the robot
+	// arcs smoothly instead of ploughing past the target.
+	throttle := n.DriveSpeed * (1.0 - 0.4*math.Abs(correction)/n.TurnSpeed)
+
+	return DriveCommand{Throttle: throttle, Turn: correction}, nil
 }
 
 // PickNextBall selects the best ball to collect next:
