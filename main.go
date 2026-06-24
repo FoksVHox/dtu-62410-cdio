@@ -157,11 +157,11 @@ func main() {
 			contour := ballContours.At(i)
 			area := gocv.ContourArea(contour)
 
-			if area > 100 && area < 300 {
+			if area > 100 && area < 600 {
 				rect := gocv.BoundingRect(contour)
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
-				if aspectRatio > 0.7 && aspectRatio < 1.5 {
+				if aspectRatio > 0.55 && aspectRatio < 1.5 {
 					centerX := rect.Min.X + (rect.Dx() / 2)
 					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
