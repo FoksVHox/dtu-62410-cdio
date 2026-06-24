@@ -14,7 +14,6 @@ import (
 type ballSighting struct {
 	firstSeen time.Time
 	lastSeen  time.Time
-	isOrange  bool
 }
 
 // stationaryRadius is the pixel tolerance for considering two detections the
@@ -87,7 +86,6 @@ func main() {
 	// straight forward at phantomThrottle for phantomDuration instead of
 	// re-running the navigator (which would immediately report Arrived and stop).
 	var phantomUntil time.Time // non-zero while latch is active
-	var phantomOrange bool     // was the latched ball orange?
 	phantomActive := false
 
 	// deliverTimer is reused for both the latch-open wait and the latch-close wait.
@@ -105,9 +103,6 @@ func main() {
 	redMask := gocv.NewMat()
 	defer redMask.Close()
 
-	orangeMask := gocv.NewMat()
-	defer orangeMask.Close()
-
 	gray := gocv.NewMat()
 	defer gray.Close()
 	thresh := gocv.NewMat()
@@ -120,7 +115,6 @@ func main() {
 	greenColor := color.RGBA{0, 255, 0, 0}
 	yellowColor := color.RGBA{0, 255, 255, 0}
 	cyanColor := color.RGBA{255, 255, 0, 0}
-	orangeColor := color.RGBA{0, 165, 255, 0}
 	magentaColor := color.RGBA{255, 0, 255, 0}
 	targetColor := color.RGBA{0, 0, 255, 0}
 	grayColor := color.RGBA{160, 160, 160, 0}
@@ -141,7 +135,7 @@ func main() {
 		goal := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
-		// PART 1: RED ZONES & ORANGE MASK
+		// PART 1: RED ZONES
 		// ==========================================
 		gocv.CvtColor(img, &hsv, gocv.ColorBGRToHSV)
 
@@ -153,10 +147,6 @@ func main() {
 		gocv.InRangeWithScalar(hsv, lowerRed1, upperRed1, &mask1)
 		gocv.InRangeWithScalar(hsv, lowerRed2, upperRed2, &mask2)
 		gocv.BitwiseOr(mask1, mask2, &redMask)
-
-		lowerOrange := gocv.NewScalar(11, 100, 100, 0)
-		upperOrange := gocv.NewScalar(25, 255, 255, 0)
-		gocv.InRangeWithScalar(hsv, lowerOrange, upperOrange, &orangeMask)
 
 		redContours := gocv.FindContours(redMask, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 		var redZones []image.Rectangle
@@ -171,11 +161,11 @@ func main() {
 		redContours.Close()
 
 		// ==========================================
-		// PART 2: BALL DETECTION
+		// PART 2: BALL DETECTION (white balls only)
+		// The orange VIP ball is intentionally ignored.
 		// ==========================================
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
 		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
-		gocv.BitwiseOr(thresh, orangeMask, &thresh)
 		gocv.Dilate(thresh, &thresh, kernel)
 		gocv.Erode(thresh, &thresh, kernel)
 
@@ -206,15 +196,17 @@ func main() {
 						continue
 					}
 
-					radius := rect.Dx() / 2
-
-					isOrange := false
-					if centerX >= 0 && centerX < orangeMask.Cols() &&
-						centerY >= 0 && centerY < orangeMask.Rows() {
-						if orangeMask.GetUCharAt(centerY, centerX) > 0 {
-							isOrange = true
+					// Skip orange-coloured detections — ignore the VIP ball entirely.
+					if centerX >= 0 && centerX < hsv.Cols() &&
+						centerY >= 0 && centerY < hsv.Rows() {
+						h := hsv.GetUCharAt(centerY, centerX*3)
+						s := hsv.GetUCharAt(centerY, centerX*3+1)
+						if h >= 11 && h <= 25 && s > 100 {
+							continue // orange hue — skip
 						}
 					}
+
+					radius := rect.Dx() / 2
 
 					var matchKey *image.Point
 					for k := range sightings {
@@ -231,10 +223,9 @@ func main() {
 					if matchKey != nil {
 						key = *matchKey
 						sightings[key].lastSeen = now
-						sightings[key].isOrange = isOrange
 					} else {
 						key = ballCenter
-						sightings[key] = &ballSighting{firstSeen: now, lastSeen: now, isOrange: isOrange}
+						sightings[key] = &ballSighting{firstSeen: now, lastSeen: now}
 					}
 					seenKeys[key] = true
 
@@ -257,18 +248,16 @@ func main() {
 							}
 						}
 
-						balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
+						balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed})
 
 						drawColor := greenColor
 						if inRed {
 							drawColor = yellowColor
-						} else if isOrange {
-							drawColor = orangeColor
 						}
 						gocv.Circle(&img, ballCenter, radius, drawColor, 1)
 						gocv.Circle(&img, ballCenter, 4, drawColor, -1)
 
-						fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
+						fmt.Printf("[Ball #%d] X: %d, Y: %d\n", ballsTrackedCount, centerX, centerY)
 					} else if !confirmed {
 						remaining := stationaryThreshold - dwellTime
 						gocv.Circle(&img, ballCenter, radius, grayColor, 1)
@@ -307,11 +296,8 @@ func main() {
 				if now.After(phantomUntil) {
 					// Ball is now fully harvested. Count it.
 					state.BallsInHarvester++
-					fmt.Printf("[FSM] Phantom latch expired. Ball in harvester (orange=%v). Harvester: %d/%d balls.\n",
-						phantomOrange, state.BallsInHarvester, state.MaxHarvesterLoad)
-					if phantomOrange {
-						state.CarryingOrange = true
-					}
+					fmt.Printf("[FSM] Phantom latch expired. Harvester: %d/%d balls.\n",
+						state.BallsInHarvester, state.MaxHarvesterLoad)
 					phantomActive = false
 					lockedTarget = nil
 					robotLink.Stop()
@@ -342,10 +328,10 @@ func main() {
 
 			// ---- BALL SELECTION: pick once and lock ----
 			if lockedTarget == nil {
-				lockedTarget = PickNextBall(robot, balls, state.OrangeDelivered)
+				lockedTarget = PickNextBall(robot, balls)
 				if lockedTarget != nil {
-					fmt.Printf("[FSM] Locked onto ball at (%d,%d) orange=%v\n",
-						lockedTarget.Center.X, lockedTarget.Center.Y, lockedTarget.IsOrange)
+					fmt.Printf("[FSM] Locked onto ball at (%d,%d)\n",
+						lockedTarget.Center.X, lockedTarget.Center.Y)
 					nav = NewNavigator()
 				}
 			} else {
@@ -391,9 +377,8 @@ func main() {
 			if cmd.Arrived {
 				phantomActive = true
 				phantomUntil = now.Add(phantomDuration)
-				phantomOrange = navTarget.IsOrange
-				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms straight-drive phantom latch.\n",
-					phantomOrange, float64(phantomDuration.Milliseconds()))
+				fmt.Printf("[FSM] Arrived at ball. Starting %.0fms straight-drive phantom latch.\n",
+					float64(phantomDuration.Milliseconds()))
 				robotLink.ForceThrottle(phantomThrottle)
 			} else {
 				robotLink.Send(cmd)
@@ -488,8 +473,6 @@ func main() {
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
 			// ── Step 3: Send LATCH_OPEN, start open-wait timer ───────────────────
-			// Sending the command once here (not in WaitLatch) is correct;
-			// the EV3 RunTimed handles the duration autonomously.
 			case DelivSubOpenLatch:
 				fmt.Printf("[DELIVER] Sending LATCH_OPEN to EV3 (releasing %d ball(s))\n",
 					state.BallsInHarvester)
@@ -511,8 +494,6 @@ func main() {
 				// Robot stays stationary; no drive command sent.
 
 			// ── Step 5: Send LATCH_CLOSE once, start close-wait timer ────────────
-			// BUG FIX: advance to DelivSubWaitClose immediately after sending
-			// the command — do NOT stay in this case or the timer can never expire.
 			case DelivSubCloseLatch:
 				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3 (back motor reverses).")
 				robotLink.SendLatchClose()
@@ -531,10 +512,6 @@ func main() {
 					// Latch fully closed — credit the whole batch and decide what to do next.
 					state.BallsCollected += state.BallsInHarvester
 					state.BallsInHarvester = 0
-					if state.CarryingOrange {
-						state.OrangeDelivered = true
-						state.CarryingOrange = false
-					}
 					fmt.Printf("[DELIVER] Latch closed. Total delivered: %d/%d\n",
 						state.BallsCollected, state.TotalBalls)
 					state.DelivSubPhase = DelivSubTurn180

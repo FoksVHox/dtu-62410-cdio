@@ -198,18 +198,10 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 	return DriveCommand{Throttle: throttle, Turn: correction}, nil
 }
 
-// PickNextBall selects the best ball to collect next.
-func PickNextBall(robot RobotState, balls []Ball, orangeDelivered bool) *Ball {
+// PickNextBall selects the nearest ball to collect next (ignoring red-zone balls).
+func PickNextBall(robot RobotState, balls []Ball) *Ball {
 	if !robot.Detected || len(balls) == 0 {
 		return nil
-	}
-
-	if !orangeDelivered {
-		for i := range balls {
-			if balls[i].IsOrange && !balls[i].InRedZone {
-				return &balls[i]
-			}
-		}
 	}
 
 	var best *Ball
