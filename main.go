@@ -4,9 +4,27 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
+	"time"
 
 	"gocv.io/x/gocv"
 )
+
+// ballSighting tracks how long a candidate detection has been stable at a position.
+type ballSighting struct {
+	firstSeen time.Time
+	lastSeen  time.Time
+	isOrange  bool
+}
+
+// stationaryThreshold is how long a detection must remain still before being
+// treated as a real ball. This filters out moving reflections from the spinning
+// front mechanism.
+const stationaryThreshold = 1500 * time.Millisecond
+
+// stationaryRadius is the pixel tolerance for considering two detections the
+// same stationary position across frames.
+const stationaryRadius = 15
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
@@ -65,6 +83,16 @@ func main() {
 	orangeColor := color.RGBA{0, 165, 255, 0}  // VIP orange ball highlight
 	magentaColor := color.RGBA{255, 0, 255, 0} // Deliver-to-goal arrow
 	targetColor := color.RGBA{0, 0, 255, 0}    // DEBUG: currently targeted ball (bright red)
+	grayColor := color.RGBA{160, 160, 160, 0}  // Candidate (not yet stationary enough)
+
+	// ==========================================
+	// STATIONARITY TRACKER
+	// Key: image.Point (snapped to stationaryRadius grid for stability)
+	// Value: ballSighting — first/last seen timestamps.
+	// A candidate only graduates to a confirmed ball once it has been
+	// continuously observed at the same location for stationaryThreshold.
+	// ==========================================
+	sightings := make(map[image.Point]*ballSighting)
 
 	fmt.Println("System initialised. Running collection FSM.")
 
@@ -73,6 +101,8 @@ func main() {
 			fmt.Println("Device closed or failed to read frame")
 			return
 		}
+
+		now := time.Now()
 
 		robot := robotSpotter.TrackRobot(&img)
 		goal := goalSpotter.TrackGoal(&img)
@@ -119,14 +149,15 @@ func main() {
 
 		ballContours := gocv.FindContours(thresh, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
+		// seenKeys tracks which sighting keys were matched this frame so we can
+		// expire any that were not seen (detection disappeared or moved away).
+		seenKeys := make(map[image.Point]bool)
+
 		ballsTrackedCount := 0
 		anyBallInRedZone := false
 		var balls []Ball
 
 		for i := 0; i < ballContours.Size(); i++ {
-			if ballsTrackedCount >= 11 {
-				break
-			}
 			contour := ballContours.At(i)
 			area := gocv.ContourArea(contour)
 
@@ -139,11 +170,7 @@ func main() {
 					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
 
-					// ==========================================
-					// EXCLUSION ZONE: skip detections whose centre
-					// falls inside the robot or goal ArUco bounding
-					// box (purple square), to prevent false positives.
-					// ==========================================
+					// EXCLUSION ZONE: skip detections inside robot or goal ArUco box.
 					if robot.Detected && ballCenter.In(robot.Box) {
 						continue
 					}
@@ -151,27 +178,9 @@ func main() {
 						continue
 					}
 
-					ballsTrackedCount++
-
 					radius := rect.Dx() / 2
 
-					// ==========================================
-					// PART 3: COLLISION/TOUCH DETECTION
-					// ==========================================
-					frameWidth := img.Cols()
-					inRed := false
-					for _, zone := range redZones {
-						if zone.Dx() > int(float32(frameWidth)*0.8) {
-							continue
-						}
-						if ballCenter.In(zone) {
-							anyBallInRedZone = true
-							inRed = true
-							break
-						}
-					}
-
-					// Classify as orange if its centre pixel is inside the orange mask.
+					// Classify as orange.
 					isOrange := false
 					if centerX >= 0 && centerX < orangeMask.Cols() &&
 						centerY >= 0 && centerY < orangeMask.Rows() {
@@ -180,23 +189,89 @@ func main() {
 						}
 					}
 
-					balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
-
-					// Draw circle — orange balls get a dedicated colour.
-					drawColor := greenColor
-					if inRed {
-						drawColor = yellowColor
-					} else if isOrange {
-						drawColor = orangeColor
+					// ==========================================
+					// STATIONARITY CHECK
+					// Find the nearest existing sighting within
+					// stationaryRadius. If none found, start a new one.
+					// ==========================================
+					var matchKey *image.Point
+					for k := range sightings {
+						dx := float64(k.X - centerX)
+						dy := float64(k.Y - centerY)
+						if math.Sqrt(dx*dx+dy*dy) <= stationaryRadius {
+							k := k // capture
+							matchKey = &k
+							break
+						}
 					}
-					gocv.Circle(&img, ballCenter, radius, drawColor, 1)
-					gocv.Circle(&img, ballCenter, 4, drawColor, -1)
 
-					fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
+					var key image.Point
+					if matchKey != nil {
+						key = *matchKey
+						sightings[key].lastSeen = now
+						sightings[key].isOrange = isOrange
+					} else {
+						key = ballCenter
+						sightings[key] = &ballSighting{firstSeen: now, lastSeen: now, isOrange: isOrange}
+					}
+					seenKeys[key] = true
+
+					dwellTime := now.Sub(sightings[key].firstSeen)
+					confirmed := dwellTime >= stationaryThreshold
+
+					if confirmed && ballsTrackedCount < 11 {
+						ballsTrackedCount++
+
+						// ==========================================
+						// PART 3: COLLISION/TOUCH DETECTION
+						// ==========================================
+						frameWidth := img.Cols()
+						inRed := false
+						for _, zone := range redZones {
+							if zone.Dx() > int(float32(frameWidth)*0.8) {
+								continue
+							}
+							if ballCenter.In(zone) {
+								anyBallInRedZone = true
+								inRed = true
+								break
+							}
+						}
+
+						balls = append(balls, Ball{Center: ballCenter, InRedZone: inRed, IsOrange: isOrange})
+
+						// Draw confirmed ball circle.
+						drawColor := greenColor
+						if inRed {
+							drawColor = yellowColor
+						} else if isOrange {
+							drawColor = orangeColor
+						}
+						gocv.Circle(&img, ballCenter, radius, drawColor, 1)
+						gocv.Circle(&img, ballCenter, 4, drawColor, -1)
+
+						fmt.Printf("[Ball #%d] X: %d, Y: %d orange=%v\n", ballsTrackedCount, centerX, centerY, isOrange)
+					} else if !confirmed {
+						// Draw candidate (pending) ball with a grey dashed ring and
+						// a small countdown so the operator can see it stabilising.
+						remaining := stationaryThreshold - dwellTime
+						gocv.Circle(&img, ballCenter, radius, grayColor, 1)
+						gocv.PutText(&img,
+							fmt.Sprintf("%.1fs", remaining.Seconds()),
+							image.Pt(ballCenter.X+radius+2, ballCenter.Y+4),
+							gocv.FontHersheySimplex, 0.35, grayColor, 1)
+					}
 				}
 			}
 		}
 		ballContours.Close()
+
+		// Expire sightings that were not seen this frame (moved or disappeared).
+		for k := range sightings {
+			if !seenKeys[k] {
+				delete(sightings, k)
+			}
+		}
 
 		// ==========================================
 		// PART 4: COLLECTION STATE MACHINE
@@ -280,12 +355,9 @@ func main() {
 
 		// ==========================================
 		// PART 5: DEBUG — HIGHLIGHT TARGETED BALL
-		// Overdraw the navTarget ball with a bright red circle and
-		// a "TARGET" label so it is always visually distinct from
-		// the other balls regardless of colour or zone status.
 		// ==========================================
 		if navTarget != nil {
-			targetRadius := 14 // slightly larger than the normal ball radius
+			targetRadius := 14
 			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 2)
 			gocv.Circle(&img, navTarget.Center, 5, targetColor, -1)
 			gocv.PutText(&img, "TARGET",
