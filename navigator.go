@@ -7,76 +7,82 @@ import (
 )
 
 // Navigator holds navigation configuration and exposes methods to compute
-// the drive commands needed to reach a target ball from the current robot state.
+// the drive commands needed to reach a target ball or goal from the current
+// robot state.
 //
 // Coordinate system: top-down image, X increases rightward, Y increases downward.
 // Angles are in degrees, clockwise from the positive-X axis (matching RobotSpotter).
+//
+// Movement strategy — three stages:
+//
+//	1. COARSE ALIGN  — robot is stationary; turn in place until heading error < CoarseAlignDeg.
+//	2. DRIVE         — move forward at full DriveSpeed; apply a gentle steering correction
+//	                   proportional to the heading error.  Stay in DRIVE as long as the error
+//	                   stays below ReAlignDeg.  If the robot drifts beyond ReAlignDeg it drops
+//	                   back to COARSE ALIGN and stops.
+//	3. FINE ALIGN    — when dist < FineAlignDist the steering correction is scaled up so the
+//	                   robot arrives at the ball from directly in front rather than at an angle.
 type Navigator struct {
-	// TurnThreshold is the angle error (degrees) below which we consider ourselves
-	// aligned and start driving forward (with a steering correction).
-	TurnThreshold float64
-	// TurnHysteresis adds a dead-band so we don't flip between turn-in-place and
-	// drive mode on every frame. We enter drive mode at TurnThreshold, but only
-	// switch back to turn-in-place mode if the error exceeds
-	// TurnThreshold + TurnHysteresis.
-	TurnHysteresis float64
+	// CoarseAlignDeg: heading error (degrees) below which we leave turn-in-place and
+	// start driving. Set to 5 so the robot commits to a direction before moving.
+	CoarseAlignDeg float64
+	// ReAlignDeg: if the heading error exceeds this while driving we stop and realign.
+	// Must be > CoarseAlignDeg to create hysteresis and avoid rapid mode switching.
+	ReAlignDeg float64
+	// FineAlignDist: pixel distance at which fine-alignment steering kicks in.
+	FineAlignDist float64
 	// ArrivedRadius is the pixel distance at which we consider the ball collected.
 	ArrivedRadius float64
 	// GoalArrivedRadius is the pixel distance at which we consider the robot
-	// close enough to the goal to release the ball(s). Larger than ArrivedRadius
-	// so the robot doesn't ram the goal marker.
+	// close enough to the goal to release the ball(s).
 	GoalArrivedRadius float64
-	// DriveSpeed is the base throttle in the range [0, 1] used while moving forward.
+	// DriveSpeed is the forward throttle [0, 1] while moving.
 	DriveSpeed float64
-	// TurnSpeed is the maximum turn magnitude in the range [0, 1].
+	// TurnSpeed is the maximum turn magnitude [0, 1] used during coarse alignment.
 	TurnSpeed float64
+	// SteerGain scales the proportional steering correction while driving.
+	// Lower values = gentler curves; higher values = tighter corrections.
+	SteerGain float64
 
-	// internal hysteresis state: true when we are currently in drive mode.
+	// internal state
 	driving bool
 }
 
-// DriveCommand is the output of the navigator: a throttle + turn pair for BeltDrive.
+// DriveCommand is the output of the navigator.
 type DriveCommand struct {
 	// Throttle in [-1, 1]. Positive = forward.
 	Throttle float64
-	// Turn in [-1, 1]. Positive = clockwise (right turn). Negative = counter-clockwise.
+	// Turn in [-1, 1]. Positive = clockwise (right). Negative = counter-clockwise.
 	Turn float64
-	// Arrived is true when the robot is close enough to the ball to pick it up.
+	// Arrived is true when the robot is close enough to collect / deposit.
 	Arrived bool
 }
 
-// NewNavigator creates a Navigator with sensible defaults.
+// NewNavigator creates a Navigator with tuned defaults.
 func NewNavigator() *Navigator {
 	return &Navigator{
-		TurnThreshold:     15.0, // degrees — enter drive mode when error is below this
-		TurnHysteresis:    10.0, // degrees — extra margin before switching back to turn mode
-		ArrivedRadius:     30.0, // pixels — ball collection
-		GoalArrivedRadius: 60.0, // pixels — goal deposit (stop before hitting the marker)
+		CoarseAlignDeg:    5.0,  // stop turning-in-place once within 5 degrees
+		ReAlignDeg:        20.0, // re-enter coarse-align only if drift exceeds 20 degrees
+		FineAlignDist:     80.0, // pixels — engage stronger correction in the last 80 px
+		ArrivedRadius:     30.0, // pixels — ball collection threshold
+		GoalArrivedRadius: 60.0, // pixels — goal deposit threshold
 		DriveSpeed:        0.5,
-		TurnSpeed:         0.45,
+		TurnSpeed:         0.4,
+		SteerGain:         0.025, // turn per degree of heading error while driving
 	}
 }
 
-// NextCommand computes the drive command for one control loop tick.
-//
-//   - robot: current robot state from RobotSpotter.
-//   - target: the ball we want to reach.
-//
-// Returns (DriveCommand, nil) on success, or (zero, error) if the robot is not detected.
+// NextCommand computes the drive command to reach a ball.
 func (n *Navigator) NextCommand(robot RobotState, target Ball) (DriveCommand, error) {
 	return n.navigateTo(robot, target.Center, n.ArrivedRadius)
 }
 
-// NextCommandToPoint computes the drive command to reach an arbitrary pixel-space
-// point (e.g. the goal marker centre). Uses GoalArrivedRadius so the robot stops
-// before physically colliding with the goal marker.
-//
-// Returns (DriveCommand, nil) on success, or (zero, error) if the robot is not detected.
+// NextCommandToPoint computes the drive command to reach an arbitrary pixel-space point.
 func (n *Navigator) NextCommandToPoint(robot RobotState, target image.Point) (DriveCommand, error) {
 	return n.navigateTo(robot, target, n.GoalArrivedRadius)
 }
 
-// navigateTo is the shared steering core used by both NextCommand and NextCommandToPoint.
+// navigateTo is the shared steering core.
 func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadius float64) (DriveCommand, error) {
 	if !robot.Detected {
 		return DriveCommand{}, fmt.Errorf("navigator: robot not detected")
@@ -92,47 +98,45 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 		return DriveCommand{Arrived: true}, nil
 	}
 
-	// --- 2. Bearing to target ---
-	// math.Atan2 returns angle in [-π, π] from positive-X axis, clockwise in image coords.
-	bearingRad := math.Atan2(dy, dx)
-	bearingDeg := bearingRad * 180.0 / math.Pi
+	// --- 2. Bearing to target (degrees, clockwise from +X, 0..360) ---
+	bearingDeg := math.Atan2(dy, dx) * 180.0 / math.Pi
 	if bearingDeg < 0 {
 		bearingDeg += 360
 	}
 
-	// --- 3. Heading error ---
-	// Positive error means the target is to our right (we need to turn clockwise).
-	headingErr := bearingDeg - robot.Angle
-	// Normalise to (-180, 180]
-	headingErr = normaliseAngle(headingErr)
-
+	// --- 3. Heading error in (-180, 180] ---
+	// Positive = target is to our right (need clockwise / right turn).
+	headingErr := normaliseAngle(bearingDeg - robot.Angle)
 	absErr := math.Abs(headingErr)
 
-	// --- 4. Hysteresis: decide whether to drive or turn in place ---
+	// --- 4. Stage transitions ---
 	//
-	// We enter drive mode when the error drops below TurnThreshold.
-	// We only leave drive mode (back to turn-in-place) when the error
-	// climbs above TurnThreshold + TurnHysteresis.  This prevents the
-	// robot from flip-flopping between the two modes on every frame.
+	// COARSE ALIGN  (driving == false):
+	//   Transition to DRIVE when absErr < CoarseAlignDeg.
+	//
+	// DRIVE         (driving == true):
+	//   Stay in DRIVE as long as absErr < ReAlignDeg.
+	//   Drop back to COARSE ALIGN if absErr >= ReAlignDeg.
+	//
+	// This wide hysteresis band (5 deg → 20 deg) means the robot will not
+	// stop to realign unless it has drifted seriously, so it keeps moving
+	// forward the vast majority of the time.
 	if n.driving {
-		if absErr > n.TurnThreshold+n.TurnHysteresis {
+		if absErr >= n.ReAlignDeg {
 			n.driving = false
 		}
 	} else {
-		if absErr <= n.TurnThreshold {
+		if absErr < n.CoarseAlignDeg {
 			n.driving = true
 		}
 	}
 
+	// --- 5a. COARSE ALIGN — turn in place, no forward throttle ---
 	if !n.driving {
-		// --- 5a. Turn in place toward the target ---
-		//
-		// Use a smooth proportional ramp over the full [0°, 180°] range so the
-		// robot turns fast when badly mis-aligned and slows down gently as it
-		// approaches the desired heading.  A small minimum keeps the motor from
-		// stalling at tiny residual errors.
-		normalised := absErr / 180.0                            // 0..1
-		mag := n.TurnSpeed*normalised*(2.0-normalised) + 0.08  // smooth ease-in, min ~0.08
+		// Proportional turn: fast when badly mis-aligned, slows near target heading.
+		// Clamped to TurnSpeed; small minimum prevents motor stall.
+		norm := math.Min(absErr/90.0, 1.0) // 0..1 over the first 90 degrees
+		mag := n.TurnSpeed*norm + 0.1       // linear ramp + small dead-zone lift
 		if mag > n.TurnSpeed {
 			mag = n.TurnSpeed
 		}
@@ -140,25 +144,30 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 		return DriveCommand{Throttle: 0, Turn: turnDir}, nil
 	}
 
-	// --- 5b. Drive forward with a proportional steering correction ---
+	// --- 5b. DRIVE — move forward with gentle proportional steering correction ---
 	//
-	// Scale correction linearly with heading error, clamped to TurnSpeed.
-	// Dividing by (TurnThreshold + TurnHysteresis) gives a softer correction
-	// that stays smooth even near the mode boundary.
-	scale := n.TurnThreshold + n.TurnHysteresis
-	correction := (headingErr / scale) * n.TurnSpeed
+	// Normal gain while far away (> FineAlignDist).
+	// Boosted gain when close (< FineAlignDist) so the final approach is straight.
+	gain := n.SteerGain
+	if dist < n.FineAlignDist {
+		// Linearly increase gain as we close in, up to 3x at arrivedRadius.
+		fineRatio := 1.0 - (dist-arrivedRadius)/(n.FineAlignDist-arrivedRadius)
+		fineRatio = math.Max(0, math.Min(1, fineRatio))
+		gain = n.SteerGain * (1.0 + 2.0*fineRatio)
+	}
+
+	correction := headingErr * gain
 	correction = math.Max(-n.TurnSpeed, math.Min(n.TurnSpeed, correction))
 
-	// Reduce forward speed slightly when the correction is large so the robot
-	// arcs smoothly instead of ploughing past the target.
-	throttle := n.DriveSpeed * (1.0 - 0.4*math.Abs(correction)/n.TurnSpeed)
+	// Reduce speed slightly when a large correction is needed so the robot arcs
+	// smoothly rather than ploughing past the target.
+	throttle := n.DriveSpeed * (1.0 - 0.35*math.Abs(correction)/n.TurnSpeed)
 
 	return DriveCommand{Throttle: throttle, Turn: correction}, nil
 }
 
-// PickNextBall selects the best ball to collect next:
-//   - If an orange (VIP) ball exists and has not yet been delivered, it is
-//     always returned first regardless of distance (bonus 200 pts).
+// PickNextBall selects the best ball to collect next.
+//   - If an orange (VIP) ball exists and has not been delivered, it is returned first.
 //   - Otherwise the nearest reachable (non-red-zone) ball is returned.
 //
 // Returns nil if no reachable ball is available.
@@ -167,7 +176,6 @@ func PickNextBall(robot RobotState, balls []Ball, orangeDelivered bool) *Ball {
 		return nil
 	}
 
-	// If the orange ball hasn't been delivered yet, always go for it first.
 	if !orangeDelivered {
 		for i := range balls {
 			if balls[i].IsOrange && !balls[i].InRedZone {
@@ -176,7 +184,6 @@ func PickNextBall(robot RobotState, balls []Ball, orangeDelivered bool) *Ball {
 		}
 	}
 
-	// Fallback: nearest non-red-zone ball.
 	var best *Ball
 	bestDist := math.MaxFloat64
 	for i := range balls {
@@ -206,7 +213,7 @@ func normaliseAngle(a float64) float64 {
 	return a
 }
 
-// DebugNavigation returns a human-readable summary of the navigation state for overlay text.
+// DebugNavigation returns a human-readable nav summary for the overlay.
 func DebugNavigation(robot RobotState, target *Ball, cmd DriveCommand) string {
 	if !robot.Detected {
 		return "NAV: robot not found"
@@ -224,8 +231,7 @@ func DebugNavigation(robot RobotState, target *Ball, cmd DriveCommand) string {
 		dist, robot.Angle, cmd.Throttle, cmd.Turn)
 }
 
-// ArrowPoints draws a directional arrow from the robot toward its target
-// on an image (useful for debug overlay). Uses only stdlib image.Point.
+// ArrowPoints returns start/end image.Points for a directional arrow from 'from' toward 'to'.
 func ArrowPoints(from, to image.Point, length float64) (image.Point, image.Point) {
 	dx := float64(to.X - from.X)
 	dy := float64(to.Y - from.Y)
@@ -233,7 +239,6 @@ func ArrowPoints(from, to image.Point, length float64) (image.Point, image.Point
 	if d == 0 {
 		return from, to
 	}
-	// Clamp arrow length.
 	if length > d {
 		length = d
 	}
