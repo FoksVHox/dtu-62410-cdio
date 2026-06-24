@@ -25,30 +25,37 @@ const stationaryRadius = 15
 const phantomDuration = 50 * time.Millisecond
 
 // phantomThrottle is the forward speed used during the phantom latch burst.
-// Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
 const phantomThrottle = 0.55
 
 // ── Goal-delivery tuning ──────────────────────────────────────────────────────
+
+// deliverApproachOffsetPx is the distance (pixels) in front of the goal marker
+// that the robot drives to before spinning and reversing in.
+// "In front" means along the marker's outward face normal.
+const deliverApproachOffsetPx = 150.0
+
+// deliverApproachArrivalPx is the radius (pixels) at which the navigator
+// considers the staging / approach point reached.
+const deliverApproachArrivalPx = 35.0
 
 // deliverTurn180Tol is the heading error (degrees) at which the perpendicular
 // alignment to the goal marker face is considered complete.
 const deliverTurn180Tol = 8.0
 
 // deliverBackupSpeed is the reverse throttle magnitude used when backing into
-// the goal (positive value; sign is applied inside ForceReverse).
+// the goal.
 const deliverBackupSpeed = 0.40
 
 // deliverGoalArrivalPx is the pixel distance from the goal centre at which we
 // consider the robot close enough to open the latch.
-// Raised to 120px so the robot stops comfortably before the marker.
+// 120px leaves comfortable room for the latch to open.
 const deliverGoalArrivalPx = 120.0
 
-// deliverLatchOpenDuration is how long the latch stays open (motor forward)
-// before the close command is sent.
+// deliverLatchOpenDuration is how long the latch stays open before closing.
 const deliverLatchOpenDuration = 4 * time.Second
 
-// deliverLatchCloseDuration is how long we wait after sending LATCH_CLOSE for
-// the back motor to fully retract the latch before the FSM moves on.
+// deliverLatchCloseDuration is how long we wait after LATCH_CLOSE before
+// the FSM moves on.
 const deliverLatchCloseDuration = 4 * time.Second
 
 func main() {
@@ -58,8 +65,6 @@ func main() {
 		return
 	}
 
-	// stationaryThreshold is how long a detection must remain still before being
-	// treated as a real ball.
 	const stationaryThreshold = 500 * time.Millisecond
 
 	webcam, err := gocv.VideoCaptureDevice(cfg.Camera.Device)
@@ -83,22 +88,15 @@ func main() {
 
 	state := NewCollectionState()
 
-	// Phantom latch — after the ball disappears under the harvester, we drive
-	// straight forward at phantomThrottle for phantomDuration instead of
-	// re-running the navigator (which would immediately report Arrived and stop).
-	var phantomUntil time.Time // non-zero while latch is active
+	var phantomUntil time.Time
 	phantomActive := false
-
-	// deliverTimer is reused for both the latch-open wait and the latch-close wait.
 	var deliverTimer time.Time
-
-	// lockedTarget is the ball the robot is currently committed to collecting.
 	var lockedTarget *Ball
 
-	// lastGoalFaceAngle stores the most recent valid goal face angle so the
-	// alignment step can continue even if the marker is briefly occluded.
+	// Cache the most recent valid goal face angle + staging point.
 	var lastGoalFaceAngle float64
 	var lastGoalFaceAngleValid bool
+	var lastStagingPoint image.Point
 
 	hsv := gocv.NewMat()
 	defer hsv.Close()
@@ -116,7 +114,6 @@ func main() {
 	kernel := gocv.GetStructuringElement(gocv.MorphRect, image.Pt(5, 5))
 	defer kernel.Close()
 
-	// Colors (BGR format)
 	blueColor := color.RGBA{255, 0, 0, 0}
 	greenColor := color.RGBA{0, 255, 0, 0}
 	yellowColor := color.RGBA{0, 255, 255, 0}
@@ -140,15 +137,19 @@ func main() {
 		robot := robotSpotter.TrackRobot(&img)
 		goal := goalSpotter.TrackGoal(&img)
 
-		// Cache the goal face angle whenever we have a valid reading.
+		// Cache goal face angle and recompute staging point whenever the marker is visible.
 		if goal.Detected {
 			lastGoalFaceAngle = goal.FaceAngle
 			lastGoalFaceAngleValid = true
+			// Staging point: goal.Center + deliverApproachOffsetPx along the face normal.
+			faceRad := goal.FaceAngle * math.Pi / 180.0
+			lastStagingPoint = image.Pt(
+				goal.Center.X+int(math.Cos(faceRad)*deliverApproachOffsetPx),
+				goal.Center.Y+int(math.Sin(faceRad)*deliverApproachOffsetPx),
+			)
 		}
 
-		// ==========================================
-		// PART 1: RED ZONES
-		// ==========================================
+		// ── PART 1: RED ZONES ────────────────────────────────────────────────────
 		gocv.CvtColor(img, &hsv, gocv.ColorBGRToHSV)
 
 		lowerRed1 := gocv.NewScalar(0, 100, 100, 0)
@@ -172,10 +173,7 @@ func main() {
 		}
 		redContours.Close()
 
-		// ==========================================
-		// PART 2: BALL DETECTION (white balls only)
-		// The orange VIP ball is intentionally ignored.
-		// ==========================================
+		// ── PART 2: BALL DETECTION ───────────────────────────────────────────────
 		gocv.CvtColor(img, &gray, gocv.ColorBGRToGray)
 		gocv.Threshold(gray, &thresh, 180, 255, gocv.ThresholdBinary)
 		gocv.Dilate(thresh, &thresh, kernel)
@@ -208,13 +206,12 @@ func main() {
 						continue
 					}
 
-					// Skip orange-coloured detections — ignore the VIP ball entirely.
 					if centerX >= 0 && centerX < hsv.Cols() &&
 						centerY >= 0 && centerY < hsv.Rows() {
 						h := hsv.GetUCharAt(centerY, centerX*3)
 						s := hsv.GetUCharAt(centerY, centerX*3+1)
 						if h >= 11 && h <= 25 && s > 100 {
-							continue // orange hue — skip
+							continue
 						}
 					}
 
@@ -289,9 +286,7 @@ func main() {
 			}
 		}
 
-		// ==========================================
-		// PART 4: COLLECTION STATE MACHINE
-		// ==========================================
+		// ── PART 4: COLLECTION STATE MACHINE ────────────────────────────────────
 		var cmd DriveCommand
 		var navTarget *Ball
 
@@ -303,10 +298,9 @@ func main() {
 				break
 			}
 
-			// ---- PHANTOM LATCH CHECK ----
+			// ── PHANTOM LATCH CHECK ──────────────────────────────────────────────
 			if phantomActive {
 				if now.After(phantomUntil) {
-					// Ball is now fully harvested. Count it.
 					state.BallsInHarvester++
 					fmt.Printf("[FSM] Phantom latch expired. Harvester: %d/%d balls.\n",
 						state.BallsInHarvester, state.MaxHarvesterLoad)
@@ -314,18 +308,16 @@ func main() {
 					lockedTarget = nil
 					robotLink.Stop()
 
-					// Decide: go get more balls, or deliver the current batch?
 					remainingOnField := state.TotalBalls - state.BallsCollected - state.BallsInHarvester
 					shouldDeliver := state.BallsInHarvester >= state.MaxHarvesterLoad ||
 						remainingOnField <= 0
 					if shouldDeliver {
 						fmt.Printf("[FSM] Harvester full (%d/%d) or no balls left — delivering to goal.\n",
 							state.BallsInHarvester, state.MaxHarvesterLoad)
-						state.DelivSubPhase = DelivSubTurn180
+						state.DelivSubPhase = DelivSubApproach
 						nav = NewNavigator()
 						state.Phase = PhaseDeliverGoal
 					} else {
-						// Keep collecting — reset nav to go after the next ball.
 						nav = NewNavigator()
 					}
 					break
@@ -338,7 +330,7 @@ func main() {
 				break
 			}
 
-			// ---- BALL SELECTION: pick once and lock ----
+			// ── BALL SELECTION ───────────────────────────────────────────────────
 			if lockedTarget == nil {
 				lockedTarget = PickNextBall(robot, balls)
 				if lockedTarget != nil {
@@ -365,12 +357,10 @@ func main() {
 			navTarget = lockedTarget
 
 			if navTarget == nil {
-				// No ball visible on the field.
 				if state.BallsInHarvester > 0 {
-					// We're already carrying some — go deliver them.
 					fmt.Printf("[FSM] No balls visible; %d in harvester — delivering to goal.\n",
 						state.BallsInHarvester)
-					state.DelivSubPhase = DelivSubTurn180
+					state.DelivSubPhase = DelivSubApproach
 					nav = NewNavigator()
 					state.Phase = PhaseDeliverGoal
 				} else {
@@ -389,7 +379,7 @@ func main() {
 			if cmd.Arrived {
 				phantomActive = true
 				phantomUntil = now.Add(phantomDuration)
-				fmt.Printf("[FSM] Arrived at ball. Starting %.0fms straight-drive phantom latch.\n",
+				fmt.Printf("[FSM] Arrived at ball. Starting %.0fms phantom latch.\n",
 					float64(phantomDuration.Milliseconds()))
 				robotLink.ForceThrottle(phantomThrottle)
 			} else {
@@ -398,10 +388,8 @@ func main() {
 				gocv.Line(&img, start, end, cyanColor, 1)
 			}
 
-		// ==========================================
-		// GOAL DELIVERY — 6-STEP SUB-FSM
-		// TURN180 → BACK_UP → OPEN_LATCH → WAIT_LATCH → CLOSE_LATCH → WAIT_CLOSE
-		// ==========================================
+		// ── GOAL DELIVERY — 7-STEP SUB-FSM ──────────────────────────────────────
+		// APPROACH → TURN180 → BACK_UP → OPEN_LATCH → WAIT_LATCH → CLOSE_LATCH → WAIT_CLOSE
 		case PhaseDeliverGoal:
 			if !robot.Detected {
 				robotLink.Stop()
@@ -412,34 +400,65 @@ func main() {
 
 			switch state.DelivSubPhase {
 
-			// ── Step 1: Align robot back perpendicular to the goal marker face ───────
+			// ── Step 0: Drive forward to staging point in front of the goal ───────
 			//
-			// Strategy: read FaceAngle from the ArUco marker (the outward normal of
-			// its top edge). The robot must reverse along that normal, so its back
-			// must face the direction the marker is "looking" at us, i.e. the robot
-			// heading = FaceAngle + 180°.
-			//
-			// If the marker is briefly occluded we fall back to the last cached
-			// FaceAngle, and as a last resort to the bearing-to-centre method.
+			// We project a point deliverApproachOffsetPx pixels out from the goal
+			// centre along its face normal. The normal navigator drives the robot
+			// there. Once arrived the robot is in front of the marker and can spin
+			// cleanly before reversing straight in.
+			case DelivSubApproach:
+				if !lastGoalFaceAngleValid {
+					// No marker data yet — wait in place.
+					robotLink.Stop()
+					gocv.PutText(&img, "DELIVER APPROACH: waiting for goal marker",
+						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+					break
+				}
+
+				// Draw the staging point on the overlay.
+				gocv.Circle(&img, lastStagingPoint, 8, magentaColor, -1)
+				gocv.Line(&img, goal.Center, lastStagingPoint, magentaColor, 1)
+
+				// Use a custom arrival radius so we don't overshoot.
+				nav.GoalArrivedRadius = deliverApproachArrivalPx
+				approachCmd, navErr := nav.NextCommandToPoint(robot, lastStagingPoint)
+				if navErr != nil {
+					robotLink.Stop()
+					break
+				}
+
+				dx := float64(lastStagingPoint.X - robot.Center.X)
+				dy := float64(lastStagingPoint.Y - robot.Center.Y)
+				dist := math.Sqrt(dx*dx + dy*dy)
+
+				gocv.PutText(&img,
+					fmt.Sprintf("DELIVER: APPROACH dist=%.0fpx staging=(%d,%d)",
+						dist, lastStagingPoint.X, lastStagingPoint.Y),
+					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+
+				if approachCmd.Arrived {
+					fmt.Println("[DELIVER] APPROACH complete — robot at staging point. Switching to TURN180.")
+					robotLink.Stop()
+					nav = NewNavigator() // reset navigator for next use
+					state.DelivSubPhase = DelivSubTurn180
+				} else {
+					robotLink.Send(approachCmd)
+					start, end := ArrowPoints(robot.Center, lastStagingPoint, 60)
+					gocv.Line(&img, start, end, magentaColor, 1)
+				}
+
+			// ── Step 1: Spin to align robot back with the marker face normal ──────
 			case DelivSubTurn180:
-				// Determine target heading: robot back must face the marker's outward normal.
 				var targetHeading float64
 				if goal.Detected {
-					// Primary: use the marker face normal directly.
-					// The robot's FRONT must face away from the marker (FaceAngle + 180),
-					// so that the robot's BACK faces the marker front — ready to reverse in.
 					targetHeading = math.Mod(goal.FaceAngle+180, 360)
-					fmt.Printf("[DELIVER] TURN180 | using marker FaceAngle=%.1f° → targetHeading=%.1f°\n",
+					fmt.Printf("[DELIVER] TURN180 | FaceAngle=%.1f° → targetHeading=%.1f°\n",
 						goal.FaceAngle, targetHeading)
 				} else if lastGoalFaceAngleValid {
-					// Fallback 1: use cached face angle from last frame.
 					targetHeading = math.Mod(lastGoalFaceAngle+180, 360)
-					gocv.PutText(&img, "DELIVER TURN180: marker occluded — using cached angle",
+					gocv.PutText(&img, "DELIVER TURN180: using cached angle",
 						image.Pt(20, 120), gocv.FontHersheySimplex, 0.5, magentaColor, 1)
-					fmt.Printf("[DELIVER] TURN180 | marker lost — using cached FaceAngle=%.1f° → targetHeading=%.1f°\n",
-						lastGoalFaceAngle, targetHeading)
 				} else {
-					// Fallback 2: no marker data at all — wait in place.
 					robotLink.Stop()
 					gocv.PutText(&img, "DELIVER TURN180: waiting for goal marker",
 						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
@@ -454,7 +473,7 @@ func main() {
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 
 				if absErr <= deliverTurn180Tol {
-					fmt.Println("[DELIVER] TURN180 complete — robot aligned perpendicular to goal. Switching to BACK_UP.")
+					fmt.Println("[DELIVER] TURN180 complete — perpendicular to goal. Switching to BACK_UP.")
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubBackUp
 					break
@@ -464,14 +483,9 @@ func main() {
 				turnMag := math.Min(absErr/15.0, 1.0) * 0.4
 				robotLink.Send(DriveCommand{Throttle: 0, Turn: turnSign * turnMag})
 
-			// ── Step 2: Reverse straight into the goal, stop short of the marker ────
-			//
-			// The robot reverses along the marker face normal. Steering correction
-			// keeps the approach straight. We stop at deliverGoalArrivalPx pixels
-			// from the marker centre, which leaves enough room to open the latch.
+			// ── Step 2: Reverse straight into the goal, stop short ────────────────
 			case DelivSubBackUp:
 				if !goal.Detected {
-					// Marker briefly lost — keep reversing on the last known heading.
 					robotLink.ForceReverse(deliverBackupSpeed)
 					gocv.PutText(&img, "DELIVER BACK_UP: goal marker lost — continuing",
 						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
@@ -486,39 +500,34 @@ func main() {
 					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx (stop at %.0fpx)", dist, deliverGoalArrivalPx),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 				gocv.Line(&img, robot.Center, goal.Center, magentaColor, 1)
-				fmt.Printf("[DELIVER] BACK_UP | dist=%.1fpx goal=(%d,%d) robot=(%d,%d)\n",
-					dist, goal.Center.X, goal.Center.Y, robot.Center.X, robot.Center.Y)
+				fmt.Printf("[DELIVER] BACK_UP | dist=%.1fpx\n", dist)
 
 				if dist <= deliverGoalArrivalPx {
-					fmt.Printf("[DELIVER] BACK_UP complete — stopped %.0fpx from goal marker. Opening latch.\n", dist)
+					fmt.Printf("[DELIVER] BACK_UP complete — stopped %.0fpx from marker. Opening latch.\n", dist)
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubOpenLatch
 					break
 				}
 
-				// Steering: keep the robot aligned with the marker face normal while reversing.
-				// Use the live FaceAngle when available, otherwise fall back to cached value.
 				var approachAngle float64
 				if goal.Detected {
 					approachAngle = math.Mod(goal.FaceAngle+180, 360)
 				} else {
 					approachAngle = math.Mod(lastGoalFaceAngle+180, 360)
 				}
-				// The robot's back should face approachAngle, i.e. robot.Angle = approachAngle.
-				// Steer to correct drift.
 				steerErr := normaliseAngle(approachAngle - robot.Angle)
 				steerCorr := math.Max(-0.25, math.Min(0.25, steerErr*0.015))
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
-			// ── Step 3: Send LATCH_OPEN, start open-wait timer ───────────────────
+			// ── Step 3: Send LATCH_OPEN ───────────────────────────────────────────
 			case DelivSubOpenLatch:
-				fmt.Printf("[DELIVER] Sending LATCH_OPEN to EV3 (releasing %d ball(s))\n",
+				fmt.Printf("[DELIVER] Sending LATCH_OPEN (releasing %d ball(s))\n",
 					state.BallsInHarvester)
 				robotLink.SendLatchOpen()
 				deliverTimer = now.Add(deliverLatchOpenDuration)
 				state.DelivSubPhase = DelivSubWaitLatch
 
-			// ── Step 4: Hold still while balls roll out ───────────────────────────
+			// ── Step 4: Wait for balls to roll out ────────────────────────────────
 			case DelivSubWaitLatch:
 				remaining := time.Until(deliverTimer)
 				gocv.PutText(&img,
@@ -529,30 +538,26 @@ func main() {
 					fmt.Println("[DELIVER] Open timer expired — sending LATCH_CLOSE")
 					state.DelivSubPhase = DelivSubCloseLatch
 				}
-				// Robot stays stationary; no drive command sent.
 
-			// ── Step 5: Send LATCH_CLOSE once, start close-wait timer ────────────
+			// ── Step 5: Send LATCH_CLOSE ──────────────────────────────────────────
 			case DelivSubCloseLatch:
-				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3 (back motor reverses).")
+				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3.")
 				robotLink.SendLatchClose()
 				deliverTimer = now.Add(deliverLatchCloseDuration)
-				// Advance immediately so the next frame enters DelivSubWaitClose.
 				state.DelivSubPhase = DelivSubWaitClose
 
-			// ── Step 6: Wait for the back motor to finish retracting ────────────
+			// ── Step 6: Wait for latch to retract ─────────────────────────────────
 			case DelivSubWaitClose:
 				remaining := time.Until(deliverTimer)
 				gocv.PutText(&img,
 					fmt.Sprintf("DELIVER: LATCH CLOSING %.1fs", remaining.Seconds()),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
-				// Robot stays stationary while latch retracts.
 				if now.After(deliverTimer) {
-					// Latch fully closed — credit the whole batch and decide what to do next.
 					state.BallsCollected += state.BallsInHarvester
 					state.BallsInHarvester = 0
 					fmt.Printf("[DELIVER] Latch closed. Total delivered: %d/%d\n",
 						state.BallsCollected, state.TotalBalls)
-					state.DelivSubPhase = DelivSubTurn180
+					state.DelivSubPhase = DelivSubApproach
 					if state.BallsCollected >= state.TotalBalls {
 						state.Phase = PhaseDone
 						fmt.Println("[FSM] All balls delivered! Stopping.")
@@ -567,18 +572,13 @@ func main() {
 			robotLink.Stop()
 		}
 
-		// ==========================================
-		// PART 5: DEBUG — HIGHLIGHT TARGETED BALL
-		// ==========================================
+		// ── PART 5: HIGHLIGHT TARGETED BALL ─────────────────────────────────────
 		if navTarget != nil {
-			targetRadius := 14
-			gocv.Circle(&img, navTarget.Center, targetRadius, targetColor, 1)
+			gocv.Circle(&img, navTarget.Center, 14, targetColor, 1)
 			gocv.Circle(&img, navTarget.Center, 5, targetColor, -1)
 		}
 
-		// ==========================================
-		// PART 6: DISPLAY SYSTEM GLOBAL STATUS
-		// ==========================================
+		// ── PART 6: STATUS HUD ───────────────────────────────────────────────────
 		phaseStr := map[Phase]string{
 			PhasePickBall:    "PICK",
 			PhaseDeliverGoal: "DELIVER",
@@ -597,6 +597,9 @@ func main() {
 		}
 		if goal.Detected {
 			statusText += fmt.Sprintf(" | Goal: (%d,%d) face=%.0f°", goal.Center.X, goal.Center.Y, goal.FaceAngle)
+			if state.Phase == PhaseDeliverGoal && state.DelivSubPhase == DelivSubApproach {
+				statusText += fmt.Sprintf(" staging=(%d,%d)", lastStagingPoint.X, lastStagingPoint.Y)
+			}
 		} else {
 			statusText += " | Goal: NOT FOUND"
 		}
