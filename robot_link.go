@@ -28,9 +28,9 @@ type RobotLink struct {
 
 	// Smoothing: limit how fast throttle/turn can change per command to avoid
 	// jerky motion and wheel slip.
-	maxStep  float64
-	curThr   float64
-	curTurn  float64
+	maxStep float64
+	curThr  float64
+	curTurn float64
 	minPause time.Duration
 }
 
@@ -50,8 +50,6 @@ func NewRobotLink(addr string) *RobotLink {
 }
 
 // dialWithRetry keeps trying to connect to the robot until it succeeds.
-// It blocks the caller, so it should only be called from NewRobotLink (at
-// startup) or from a goroutine when reconnecting after a dropped connection.
 func (rl *RobotLink) dialWithRetry() {
 	const retryInterval = 2 * time.Second
 	attempt := 0
@@ -84,20 +82,27 @@ func (rl *RobotLink) reconnectAsync() {
 }
 
 // Send applies smoothing/rate-limiting and forwards the command to the robot.
+// Every call is logged to stdout so behaviour can be debugged from the terminal.
 func (rl *RobotLink) Send(cmd DriveCommand) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	now := time.Now()
+
 	// Rate limit so we don't flood the EV3.
-	if time.Since(rl.lastSend) < rl.minPause {
+	if now.Sub(rl.lastSend) < rl.minPause {
+		fmt.Printf("[RobotLink] SKIP (rate-limited) raw=thr:%.3f turn:%.3f arrived:%v\n",
+			cmd.Throttle, cmd.Turn, cmd.Arrived)
 		return
 	}
-	rl.lastSend = time.Now()
+	rl.lastSend = now
 
 	targetThr, targetTurn := cmd.Throttle, cmd.Turn
 	if cmd.Arrived {
 		targetThr, targetTurn = 0, 0
 	}
+
+	prevThr, prevTurn := rl.curThr, rl.curTurn
 
 	// Smoothly ramp current values toward the target.
 	rl.curThr = approach(rl.curThr, targetThr, rl.maxStep)
@@ -108,8 +113,16 @@ func (rl *RobotLink) Send(cmd DriveCommand) {
 		line = "STOP\n"
 	}
 
+	// --- Verbose debug print ---
+	fmt.Printf("[RobotLink] t=%s | arrived=%v | raw thr=%.3f turn=%.3f | prev thr=%.3f turn=%.3f | SEND thr=%.3f turn=%.3f\n",
+		now.Format("15:04:05.000"),
+		cmd.Arrived,
+		cmd.Throttle, cmd.Turn,
+		prevThr, prevTurn,
+		clamp(rl.curThr, -1, 1), clamp(rl.curTurn, -1, 1),
+	)
+
 	if !rl.enabled || rl.conn == nil {
-		// Simulation mode or still reconnecting: just show what we would send.
 		fmt.Printf("[RobotLink:SIM] %s", line)
 		return
 	}
@@ -130,6 +143,7 @@ func (rl *RobotLink) Stop() {
 	} else {
 		fmt.Println("[RobotLink:SIM] STOP")
 	}
+	fmt.Println("[RobotLink] STOP sent, smoothing state reset")
 }
 
 // Close stops the robot and closes the connection.
