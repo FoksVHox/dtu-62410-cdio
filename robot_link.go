@@ -28,9 +28,9 @@ type RobotLink struct {
 
 	// Smoothing: limit how fast throttle/turn can change per command to avoid
 	// jerky motion and wheel slip.
-	maxStep float64
-	curThr  float64
-	curTurn float64
+	maxStep  float64
+	curThr   float64
+	curTurn  float64
 	minPause time.Duration
 }
 
@@ -40,7 +40,7 @@ func NewRobotLink(addr string) *RobotLink {
 	rl := &RobotLink{
 		addr:     addr,
 		enabled:  addr != "",
-		maxStep:  0.15,
+		maxStep:  0.10,
 		minPause: 80 * time.Millisecond,
 	}
 	if rl.enabled {

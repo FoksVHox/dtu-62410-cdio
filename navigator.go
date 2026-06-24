@@ -16,14 +16,14 @@ import (
 // Movement strategy — three stages:
 //
 //  1. COARSE ALIGN  — robot is stationary; turn in place until heading error < DeadBandDeg.
-//                     The turn DIRECTION is locked on entry and never flips, preventing
-//                     ±180° wrap-around oscillation.
+//     The turn DIRECTION is locked on entry and never flips, preventing
+//     ±180° wrap-around oscillation.
 //  2. DRIVE         — move forward at full DriveSpeed; apply a gentle steering correction
-//                     proportional to the heading error.  Stay in DRIVE as long as the
-//                     error stays below ReAlignDeg.  If the robot drifts beyond ReAlignDeg
-//                     it drops back to COARSE ALIGN and stops.
+//     proportional to the heading error.  Stay in DRIVE as long as the
+//     error stays below ReAlignDeg.  If the robot drifts beyond ReAlignDeg
+//     it drops back to COARSE ALIGN and stops.
 //  3. FINE ALIGN    — when dist < FineAlignDist the steering correction is scaled up so the
-//                     robot arrives at the ball from directly in front rather than at an angle.
+//     robot arrives at the ball from directly in front rather than at an angle.
 type Navigator struct {
 	// CoarseAlignDeg: heading error (degrees) at which the proportional turn reaches TurnSpeed.
 	CoarseAlignDeg float64
@@ -67,7 +67,7 @@ type DriveCommand struct {
 func NewNavigator() *Navigator {
 	return &Navigator{
 		CoarseAlignDeg:    15.0, // proportional ramp reaches TurnSpeed at 15°
-		DeadBandDeg:       3.0,  // enter DRIVE once within 3° — tight but stable
+		DeadBandDeg:       7.0,  // enter DRIVE once within 3° — tight but stable
 		ReAlignDeg:        20.0, // stop driving and realign if drift exceeds 20°
 		FineAlignDist:     80.0,
 		ArrivedRadius:     30.0,
