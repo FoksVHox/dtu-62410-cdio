@@ -15,17 +15,20 @@ import (
 //
 // Movement strategy — three stages:
 //
-//	1. COARSE ALIGN  — robot is stationary; turn in place until heading error < CoarseAlignDeg.
-//	2. DRIVE         — move forward at full DriveSpeed; apply a gentle steering correction
-//	                   proportional to the heading error.  Stay in DRIVE as long as the error
-//	                   stays below ReAlignDeg.  If the robot drifts beyond ReAlignDeg it drops
-//	                   back to COARSE ALIGN and stops.
-//	3. FINE ALIGN    — when dist < FineAlignDist the steering correction is scaled up so the
-//	                   robot arrives at the ball from directly in front rather than at an angle.
+//  1. COARSE ALIGN  — robot is stationary; turn in place until heading error < CoarseAlignDeg.
+//  2. DRIVE         — move forward at full DriveSpeed; apply a gentle steering correction
+//                     proportional to the (smoothed) heading error.  Stay in DRIVE as long
+//                     as the error stays below ReAlignDeg.  If the robot drifts beyond
+//                     ReAlignDeg it drops back to COARSE ALIGN and stops.
+//  3. FINE ALIGN    — when dist < FineAlignDist the steering correction is scaled up so the
+//                     robot arrives at the ball from directly in front rather than at an angle.
 type Navigator struct {
 	// CoarseAlignDeg: heading error (degrees) below which we leave turn-in-place and
 	// start driving. Set to 5 so the robot commits to a direction before moving.
 	CoarseAlignDeg float64
+	// DeadBandDeg: heading error below which we consider ourselves aligned inside
+	// CoarseAlign. Must be <= CoarseAlignDeg. Prevents hunting right at the boundary.
+	DeadBandDeg float64
 	// ReAlignDeg: if the heading error exceeds this while driving we stop and realign.
 	// Must be > CoarseAlignDeg to create hysteresis and avoid rapid mode switching.
 	ReAlignDeg float64
@@ -43,9 +46,16 @@ type Navigator struct {
 	// SteerGain scales the proportional steering correction while driving.
 	// Lower values = gentler curves; higher values = tighter corrections.
 	SteerGain float64
+	// ErrAlpha is the exponential moving average factor for heading error smoothing.
+	// Range (0,1]: 1.0 = no smoothing, 0.1 = heavy smoothing.
+	ErrAlpha float64
 
 	// internal state
-	driving bool
+	driving      bool
+	smoothedErr  float64
+	lastTargetX  int
+	lastTargetY  int
+	targetInited bool
 }
 
 // DriveCommand is the output of the navigator.
@@ -61,14 +71,16 @@ type DriveCommand struct {
 // NewNavigator creates a Navigator with tuned defaults.
 func NewNavigator() *Navigator {
 	return &Navigator{
-		CoarseAlignDeg:    5.0,  // stop turning-in-place once within 5 degrees
-		ReAlignDeg:        20.0, // re-enter coarse-align only if drift exceeds 20 degrees
-		FineAlignDist:     80.0, // pixels — engage stronger correction in the last 80 px
-		ArrivedRadius:     30.0, // pixels — ball collection threshold
-		GoalArrivedRadius: 60.0, // pixels — goal deposit threshold
+		CoarseAlignDeg:    5.0,   // stop turning-in-place once within 5 degrees
+		DeadBandDeg:       1.5,   // dead-band inside CoarseAlign to stop hunting
+		ReAlignDeg:        20.0,  // re-enter coarse-align only if drift exceeds 20 degrees
+		FineAlignDist:     80.0,  // pixels — engage stronger correction in the last 80 px
+		ArrivedRadius:     30.0,  // pixels — ball collection threshold
+		GoalArrivedRadius: 60.0,  // pixels — goal deposit threshold
 		DriveSpeed:        0.5,
 		TurnSpeed:         0.4,
 		SteerGain:         0.025, // turn per degree of heading error while driving
+		ErrAlpha:          0.25,  // EMA smoothing: ~4 frame lag, enough to kill 1-frame noise
 	}
 }
 
@@ -88,6 +100,17 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 		return DriveCommand{}, fmt.Errorf("navigator: robot not detected")
 	}
 
+	// --- 0. Detect target change and reset driving state ---
+	// If the target point changes (new ball selected), reset driving so the robot
+	// always coarse-aligns to the new target before moving forward.
+	if !n.targetInited || target.X != n.lastTargetX || target.Y != n.lastTargetY {
+		n.driving = false
+		n.smoothedErr = 0
+		n.lastTargetX = target.X
+		n.lastTargetY = target.Y
+		n.targetInited = true
+	}
+
 	// --- 1. Distance to target ---
 	dx := float64(target.X - robot.Center.X)
 	dy := float64(target.Y - robot.Center.Y)
@@ -95,6 +118,7 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 
 	if dist <= arrivedRadius {
 		n.driving = false
+		n.smoothedErr = 0
 		return DriveCommand{Arrived: true}, nil
 	}
 
@@ -104,47 +128,53 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 		bearingDeg += 360
 	}
 
-	// --- 3. Heading error in (-180, 180] ---
+	// --- 3. Raw heading error in (-180, 180] ---
 	// Positive = target is to our right (need clockwise / right turn).
-	headingErr := normaliseAngle(bearingDeg - robot.Angle)
-	absErr := math.Abs(headingErr)
+	rawErr := normaliseAngle(bearingDeg - robot.Angle)
 
-	// --- 4. Stage transitions ---
+	// --- 4. Smooth the heading error with an EMA to kill frame-to-frame noise ---
+	// On the very first tick after a target change smoothedErr==0; seed it directly.
+	if n.smoothedErr == 0 && !n.driving {
+		n.smoothedErr = rawErr
+	} else {
+		n.smoothedErr = n.ErrAlpha*rawErr + (1-n.ErrAlpha)*n.smoothedErr
+	}
+	absErr := math.Abs(n.smoothedErr)
+
+	// --- 5. Stage transitions ---
 	//
 	// COARSE ALIGN  (driving == false):
-	//   Transition to DRIVE when absErr < CoarseAlignDeg.
+	//   Transition to DRIVE when absErr < CoarseAlignDeg AND we're inside the
+	//   dead-band (absErr < DeadBandDeg counts as "arrived at heading").
+	//   Using DeadBandDeg as the true commit point stops oscillation right at
+	//   the 5-degree boundary.
 	//
 	// DRIVE         (driving == true):
 	//   Stay in DRIVE as long as absErr < ReAlignDeg.
 	//   Drop back to COARSE ALIGN if absErr >= ReAlignDeg.
 	//
-	// This wide hysteresis band (5 deg → 20 deg) means the robot will not
-	// stop to realign unless it has drifted seriously, so it keeps moving
-	// forward the vast majority of the time.
+	// Hysteresis band: DeadBandDeg (1.5°) → ReAlignDeg (20°).
 	if n.driving {
 		if absErr >= n.ReAlignDeg {
 			n.driving = false
 		}
 	} else {
-		if absErr < n.CoarseAlignDeg {
+		if absErr < n.DeadBandDeg {
 			n.driving = true
 		}
 	}
 
-	// --- 5a. COARSE ALIGN — turn in place, no forward throttle ---
+	// --- 6a. COARSE ALIGN — turn in place, zero forward throttle ---
 	if !n.driving {
-		// Proportional turn: fast when badly mis-aligned, slows near target heading.
-		// Clamped to TurnSpeed; small minimum prevents motor stall.
-		norm := math.Min(absErr/90.0, 1.0) // 0..1 over the first 90 degrees
-		mag := n.TurnSpeed*norm + 0.1       // linear ramp + small dead-zone lift
-		if mag > n.TurnSpeed {
-			mag = n.TurnSpeed
-		}
-		turnDir := math.Copysign(mag, headingErr)
+		// Pure proportional turn: tapers smoothly to zero at the dead-band edge.
+		// No minimum floor — that floor was the cause of the overshoot/oscillation.
+		norm := math.Min(absErr/n.CoarseAlignDeg, 1.0) // 0..1 over [0, CoarseAlignDeg]
+		mag := n.TurnSpeed * norm
+		turnDir := math.Copysign(mag, n.smoothedErr)
 		return DriveCommand{Throttle: 0, Turn: turnDir}, nil
 	}
 
-	// --- 5b. DRIVE — move forward with gentle proportional steering correction ---
+	// --- 6b. DRIVE — move forward with gentle proportional steering correction ---
 	//
 	// Normal gain while far away (> FineAlignDist).
 	// Boosted gain when close (< FineAlignDist) so the final approach is straight.
@@ -156,7 +186,7 @@ func (n *Navigator) navigateTo(robot RobotState, target image.Point, arrivedRadi
 		gain = n.SteerGain * (1.0 + 2.0*fineRatio)
 	}
 
-	correction := headingErr * gain
+	correction := n.smoothedErr * gain
 	correction = math.Max(-n.TurnSpeed, math.Min(n.TurnSpeed, correction))
 
 	// Reduce speed slightly when a large correction is needed so the robot arcs
