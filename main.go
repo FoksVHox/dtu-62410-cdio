@@ -305,6 +305,7 @@ func main() {
 			// ---- PHANTOM LATCH CHECK ----
 			if phantomActive {
 				if now.After(phantomUntil) {
+					// Ball is now fully harvested. Count it.
 					state.BallsInHarvester++
 					fmt.Printf("[FSM] Phantom latch expired. Ball in harvester (orange=%v). Harvester: %d/%d balls.\n",
 						phantomOrange, state.BallsInHarvester, state.MaxHarvesterLoad)
@@ -315,16 +316,18 @@ func main() {
 					lockedTarget = nil
 					robotLink.Stop()
 
+					// Decide: go get more balls, or deliver the current batch?
 					remainingOnField := state.TotalBalls - state.BallsCollected - state.BallsInHarvester
 					shouldDeliver := state.BallsInHarvester >= state.MaxHarvesterLoad ||
 						remainingOnField <= 0
 					if shouldDeliver {
-						fmt.Printf("[FSM] Harvester full or no balls left — delivering %d ball(s) to goal.\n",
-							state.BallsInHarvester)
+						fmt.Printf("[FSM] Harvester full (%d/%d) or no balls left — delivering to goal.\n",
+							state.BallsInHarvester, state.MaxHarvesterLoad)
 						state.DelivSubPhase = DelivSubTurn180
 						nav = NewNavigator()
 						state.Phase = PhaseDeliverGoal
 					} else {
+						// Keep collecting — reset nav to go after the next ball.
 						nav = NewNavigator()
 					}
 					break
@@ -364,8 +367,10 @@ func main() {
 			navTarget = lockedTarget
 
 			if navTarget == nil {
+				// No ball visible on the field.
 				if state.BallsInHarvester > 0 {
-					fmt.Printf("[FSM] No balls visible with %d in harvester — delivering.\n",
+					// We're already carrying some — go deliver them.
+					fmt.Printf("[FSM] No balls visible; %d in harvester — delivering to goal.\n",
 						state.BallsInHarvester)
 					state.DelivSubPhase = DelivSubTurn180
 					nav = NewNavigator()
@@ -483,6 +488,8 @@ func main() {
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
 			// ── Step 3: Send LATCH_OPEN, start open-wait timer ───────────────────
+			// Sending the command once here (not in WaitLatch) is correct;
+			// the EV3 RunTimed handles the duration autonomously.
 			case DelivSubOpenLatch:
 				fmt.Printf("[DELIVER] Sending LATCH_OPEN to EV3 (releasing %d ball(s))\n",
 					state.BallsInHarvester)
@@ -503,17 +510,17 @@ func main() {
 				}
 				// Robot stays stationary; no drive command sent.
 
-			// ── Step 5: Send LATCH_CLOSE, start close-wait timer ────────────────
-			// The EV3 back motor now runs in reverse to physically retract
-			// the latch. We give it deliverLatchCloseDuration to complete.
+			// ── Step 5: Send LATCH_CLOSE once, start close-wait timer ────────────
+			// BUG FIX: advance to DelivSubWaitClose immediately after sending
+			// the command — do NOT stay in this case or the timer can never expire.
 			case DelivSubCloseLatch:
-				fmt.Printf("[DELIVER] Sending LATCH_CLOSE to EV3 (back motor reverses).\n")
+				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3 (back motor reverses).")
 				robotLink.SendLatchClose()
 				deliverTimer = now.Add(deliverLatchCloseDuration)
+				// Advance immediately so the next frame enters DelivSubWaitClose.
 				state.DelivSubPhase = DelivSubWaitClose
 
 			// ── Step 6: Wait for the back motor to finish retracting ────────────
-			// Only once the timer fires do we credit the delivery and move on.
 			case DelivSubWaitClose:
 				remaining := time.Until(deliverTimer)
 				gocv.PutText(&img,
@@ -521,7 +528,7 @@ func main() {
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 				// Robot stays stationary while latch retracts.
 				if now.After(deliverTimer) {
-					// Latch fully closed — credit the batch and decide what to do next.
+					// Latch fully closed — credit the whole batch and decide what to do next.
 					state.BallsCollected += state.BallsInHarvester
 					state.BallsInHarvester = 0
 					if state.CarryingOrange {

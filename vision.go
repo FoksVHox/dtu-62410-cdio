@@ -59,7 +59,7 @@ type CollectionState struct {
 	// before triggering a delivery run.
 	BallsInHarvester int
 	// MaxHarvesterLoad is the target number of balls to collect before delivering.
-	// Set between 4 and 6.
+	// Set between 4 and 6. Change this value to tune batch size.
 	MaxHarvesterLoad int
 }
 
@@ -68,6 +68,6 @@ func NewCollectionState() *CollectionState {
 	return &CollectionState{
 		Phase:            PhasePickBall,
 		TotalBalls:       11,
-		MaxHarvesterLoad: 5, // collect 5 balls before each delivery trip
+		MaxHarvesterLoad: 5, // collect 5 balls before each delivery trip (tune: 4-6)
 	}
 }
