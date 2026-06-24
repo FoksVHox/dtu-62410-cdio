@@ -318,9 +318,9 @@ func main() {
 					// Trigger delivery if:
 					//  (a) harvester is full (reached MaxHarvesterLoad), OR
 					//  (b) no more balls remain on the field (all collected), OR
-					//  (c) this was the last ball needed to finish the run.
+					//  (c) this was the last ball½ needed to finish the run.
 					remainingOnField := state.TotalBalls - state.BallsCollected - state.BallsInHarvester
-					shoulDeliver := state.BallsInHarvester >= state.MaxHarvesterLoad ||
+					var shouldDeliver = state.BallsInHarvester >= state.MaxHarvesterLoad ||
 						remainingOnField <= 0
 					if shouldDeliver {
 						fmt.Printf("[FSM] Harvester full or no balls left — delivering %d ball(s) to goal.\n",
