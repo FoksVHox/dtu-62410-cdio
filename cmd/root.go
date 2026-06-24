@@ -59,6 +59,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		"head_driver_name":  motorCfg.Head.DriverName,
 		"head_inverted":     motorCfg.Head.Inverted,
 		"head_speed":        motorCfg.Head.Speed,
+		"back_address":      motorCfg.Back.Address,
+		"back_driver_name":  motorCfg.Back.DriverName,
+		"back_inverted":     motorCfg.Back.Inverted,
+		"back_speed":        motorCfg.Back.Speed,
+		"latch_open_time":   motorCfg.LatchOpenTime,
 		"motor_test_time":   motorCfg.MotorTestTime,
 	}).Debug("loaded motor configuration")
 
@@ -253,7 +258,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Info("skipping motor tests (enable with --debug)")
 	}
 
-	// Run head motor continuously until interrupted
+	// Run head motor continuously — collects balls while navigating.
 	log.Info("starting continuous head motor operation (press CTRL-C to stop)")
 	headSpeed := int(float64(head.MaxSpeedTPS()) * motorCfg.Head.Speed)
 	if err := head.RunForever(headSpeed); err != nil {
@@ -262,19 +267,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("speed_tps", headSpeed).Info("head motor running continuously")
 
-	// Run back motor continuously so the collection mechanism keeps working
-	// while we navigate.
-	backSpeed := int(float64(back.MaxSpeedTPS()) * motorCfg.Back.Speed)
-	if err := back.RunForever(backSpeed); err != nil {
-		log.WithError(err).Error("failed to start back motor for continuous operation")
-		return
-	}
-	log.WithField("speed_tps", backSpeed).Info("back motor running continuously")
+	// NOTE: The back motor is the latch actuator — do NOT start it here.
+	// It is driven exclusively by LATCH_OPEN / LATCH_CLOSE commands from the PC
+	// so that balls are only released when the robot is inside the goal.
+	log.Info("back motor reserved for latch actuation (LATCH_OPEN / LATCH_CLOSE)")
 
 	// Start the drive command server. The PC (vision program) connects to this
 	// address and streams "<throttle> <turn>" commands that steer the belts
-	// toward the white balls. This runs until interrupted.
-	server := mindstorm.NewCommandServer(drive, config.Get().Mindstorm.EV3.ListenAddress)
+	// toward the white balls. LATCH_OPEN and LATCH_CLOSE control the back motor.
+	server := mindstorm.NewCommandServer(drive, back, config.Get().Mindstorm.EV3.ListenAddress)
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
 			log.WithError(err).Error("drive command server stopped")

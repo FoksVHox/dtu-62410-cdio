@@ -21,4 +21,5 @@ mindstorm:
       address: motor1
       inverted: false
       speed: 0.5
+    latch_open_time: 8s
     motor_test_time: 30s

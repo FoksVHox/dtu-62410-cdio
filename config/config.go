@@ -51,13 +51,19 @@ type MotorConfiguration struct {
 	Speed      float64 `default:"0.5" json:"speed" yaml:"speed"`
 }
 
-// MotorsConfiguration defines left/right motor mappings for the belt drive.
+// MotorsConfiguration defines motor mappings for the belt drive and auxiliary motors.
 type MotorsConfiguration struct {
-	Left          MotorConfiguration `json:"left" yaml:"left"`
-	Right         MotorConfiguration `json:"right" yaml:"right"`
-	Head          MotorConfiguration `json:"head" yaml:"head"`
-	Back          MotorConfiguration `json:"back" yaml:"back"`
-	MotorTestTime time.Duration      `json:"motor_test_time" yaml:"motor_test_time"`
+	Left  MotorConfiguration `json:"left" yaml:"left"`
+	Right MotorConfiguration `json:"right" yaml:"right"`
+	Head  MotorConfiguration `json:"head" yaml:"head"`
+	Back  MotorConfiguration `json:"back" yaml:"back"`
+
+	// LatchOpenTime is how long the back motor runs when LATCH_OPEN is received.
+	// This controls how long the ball-release mechanism stays open.
+	// Default: 8 seconds.
+	LatchOpenTime time.Duration `default:"8s" json:"latch_open_time" yaml:"latch_open_time"`
+
+	MotorTestTime time.Duration `json:"motor_test_time" yaml:"motor_test_time"`
 }
 
 // MindstormConfiguration defines defaults for the EV3 SDK package.
