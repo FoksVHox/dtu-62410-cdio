@@ -45,11 +45,11 @@ const deliverGoalArrivalPx = 70.0
 
 // deliverLatchOpenDuration is how long the latch stays open (motor forward)
 // before the close command is sent.
-const deliverLatchOpenDuration = 2 * time.Second
+const deliverLatchOpenDuration = 4 * time.Second
 
 // deliverLatchCloseDuration is how long we wait after sending LATCH_CLOSE for
 // the back motor to fully retract the latch before the FSM moves on.
-const deliverLatchCloseDuration = 2 * time.Second
+const deliverLatchCloseDuration = 4 * time.Second
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
@@ -116,14 +116,14 @@ func main() {
 	defer kernel.Close()
 
 	// Colors (BGR format)
-	blueColor    := color.RGBA{255, 0, 0, 0}
-	greenColor   := color.RGBA{0, 255, 0, 0}
-	yellowColor  := color.RGBA{0, 255, 255, 0}
-	cyanColor    := color.RGBA{255, 255, 0, 0}
-	orangeColor  := color.RGBA{0, 165, 255, 0}
+	blueColor := color.RGBA{255, 0, 0, 0}
+	greenColor := color.RGBA{0, 255, 0, 0}
+	yellowColor := color.RGBA{0, 255, 255, 0}
+	cyanColor := color.RGBA{255, 255, 0, 0}
+	orangeColor := color.RGBA{0, 165, 255, 0}
 	magentaColor := color.RGBA{255, 0, 255, 0}
-	targetColor  := color.RGBA{0, 0, 255, 0}
-	grayColor    := color.RGBA{160, 160, 160, 0}
+	targetColor := color.RGBA{0, 0, 255, 0}
+	grayColor := color.RGBA{160, 160, 160, 0}
 
 	sightings := make(map[image.Point]*ballSighting)
 
@@ -138,7 +138,7 @@ func main() {
 		now := time.Now()
 
 		robot := robotSpotter.TrackRobot(&img)
-		goal  := goalSpotter.TrackGoal(&img)
+		goal := goalSpotter.TrackGoal(&img)
 
 		// ==========================================
 		// PART 1: RED ZONES & ORANGE MASK
@@ -181,22 +181,22 @@ func main() {
 
 		ballContours := gocv.FindContours(thresh, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
-		seenKeys           := make(map[image.Point]bool)
-		ballsTrackedCount  := 0
-		anyBallInRedZone   := false
+		seenKeys := make(map[image.Point]bool)
+		ballsTrackedCount := 0
+		anyBallInRedZone := false
 		var balls []Ball
 
 		for i := 0; i < ballContours.Size(); i++ {
 			contour := ballContours.At(i)
-			area    := gocv.ContourArea(contour)
+			area := gocv.ContourArea(contour)
 
 			if area > 100 && area < 300 {
-				rect        := gocv.BoundingRect(contour)
+				rect := gocv.BoundingRect(contour)
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
 				if aspectRatio > 0.7 && aspectRatio < 1.5 {
-					centerX    := rect.Min.X + (rect.Dx() / 2)
-					centerY    := rect.Min.Y + (rect.Dy() / 2)
+					centerX := rect.Min.X + (rect.Dx() / 2)
+					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
 
 					if robot.Detected && ballCenter.In(robot.Box) {
@@ -385,7 +385,7 @@ func main() {
 
 			if cmd.Arrived {
 				phantomActive = true
-				phantomUntil  = now.Add(phantomDuration)
+				phantomUntil = now.Add(phantomDuration)
 				phantomOrange = navTarget.IsOrange
 				fmt.Printf("[FSM] Arrived at ball (orange=%v). Starting %.0fms straight-drive phantom latch.\n",
 					phantomOrange, float64(phantomDuration.Milliseconds()))
@@ -426,8 +426,8 @@ func main() {
 					bearingToGoal += 360
 				}
 				targetHeading := math.Mod(bearingToGoal+180, 360)
-				headingErr    := normaliseAngle(targetHeading - robot.Angle)
-				absErr        := math.Abs(headingErr)
+				headingErr := normaliseAngle(targetHeading - robot.Angle)
+				absErr := math.Abs(headingErr)
 
 				gocv.PutText(&img,
 					fmt.Sprintf("DELIVER: TURN180 err=%.0f°", headingErr),
@@ -443,7 +443,7 @@ func main() {
 				}
 
 				turnSign := math.Copysign(1, headingErr)
-				turnMag  := math.Min(absErr/15.0, 1.0) * 0.4
+				turnMag := math.Min(absErr/15.0, 1.0) * 0.4
 				robotLink.Send(DriveCommand{Throttle: 0, Turn: turnSign * turnMag})
 
 			// ── Step 2: Reverse straight into the goal ───────────────────────────
@@ -455,8 +455,8 @@ func main() {
 					break
 				}
 
-				dx   := float64(goal.Center.X - robot.Center.X)
-				dy   := float64(goal.Center.Y - robot.Center.Y)
+				dx := float64(goal.Center.X - robot.Center.X)
+				dy := float64(goal.Center.Y - robot.Center.Y)
 				dist := math.Sqrt(dx*dx + dy*dy)
 
 				gocv.PutText(&img,
@@ -478,8 +478,8 @@ func main() {
 					bearingToGoal += 360
 				}
 				backFacing := math.Mod(robot.Angle+180, 360)
-				steerErr   := normaliseAngle(bearingToGoal - backFacing)
-				steerCorr  := math.Max(-0.25, math.Min(0.25, steerErr*0.015))
+				steerErr := normaliseAngle(bearingToGoal - backFacing)
+				steerCorr := math.Max(-0.25, math.Min(0.25, steerErr*0.015))
 				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
 
 			// ── Step 3: Send LATCH_OPEN, start open-wait timer ───────────────────
@@ -526,7 +526,7 @@ func main() {
 					state.BallsInHarvester = 0
 					if state.CarryingOrange {
 						state.OrangeDelivered = true
-						state.CarryingOrange  = false
+						state.CarryingOrange = false
 					}
 					fmt.Printf("[DELIVER] Latch closed. Total delivered: %d/%d\n",
 						state.BallsCollected, state.TotalBalls)
