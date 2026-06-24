@@ -2,7 +2,7 @@ system:
   root_directory: .
   log_directory: ./logs
 robot:
-  address: "169.254.88.57:9000"
+  address: "169.254.97.5:9000"
 camera:
   device: 1
   wait: 100

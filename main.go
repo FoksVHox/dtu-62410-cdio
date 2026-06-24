@@ -23,11 +23,11 @@ const stationaryRadius = 15
 
 // phantomDuration is how long we keep driving forward after the ball
 // disappears under the harvester.
-const phantomDuration = 1500 * time.Millisecond
+const phantomDuration = 4000 * time.Millisecond
 
 // phantomThrottle is the forward speed used during the phantom latch burst.
 // Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
-const phantomThrottle = 0.6
+const phantomThrottle = 0.65
 
 func main() {
 	cfg, err := LoadConfig("config.yml")
