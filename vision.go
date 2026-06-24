@@ -33,10 +33,12 @@ const (
 	DelivSubBackUp
 	// DelivSubOpenLatch: send LATCH_OPEN to the EV3 and start the wait timer.
 	DelivSubOpenLatch
-	// DelivSubWaitLatch: hold still while the latch is open (8 seconds).
+	// DelivSubWaitLatch: hold still while the latch is open and balls roll out.
 	DelivSubWaitLatch
-	// DelivSubCloseLatch: send LATCH_CLOSE to the EV3 to retract the back motor.
+	// DelivSubCloseLatch: send LATCH_CLOSE to the EV3 (motor drives in reverse).
 	DelivSubCloseLatch
+	// DelivSubWaitClose: hold still while the back motor retracts the latch fully.
+	DelivSubWaitClose
 )
 
 // CollectionState is the mutable FSM state threaded through the main loop.
