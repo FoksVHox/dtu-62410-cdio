@@ -29,6 +29,23 @@ const phantomDuration = 4000 * time.Millisecond
 // Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
 const phantomThrottle = 0.55
 
+// ── Goal-delivery tuning ──────────────────────────────────────────────────────
+
+// deliverTurn180Tol is the heading error (degrees) at which the 180° turn is
+// considered complete and we switch to reversing.
+const deliverTurn180Tol = 8.0
+
+// deliverBackupSpeed is the reverse throttle magnitude used when backing into
+// the goal (positive value; sign is applied inside ForceReverse).
+const deliverBackupSpeed = 0.40
+
+// deliverGoalArrivalPx is the pixel distance from the goal centre at which we
+// consider the robot close enough to open the latch.
+const deliverGoalArrivalPx = 70.0
+
+// deliverLatchOpenDuration is how long the latch stays open before being closed.
+const deliverLatchOpenDuration = 8 * time.Second
+
 func main() {
 	cfg, err := LoadConfig("config.yml")
 	if err != nil {
@@ -67,6 +84,9 @@ func main() {
 	var phantomUntil time.Time // non-zero while latch is active
 	var phantomOrange bool     // was the latched ball orange?
 	phantomActive := false
+
+	// deliverTimer is reused as a generic timer during the delivery sub-FSM.
+	var deliverTimer time.Time
 
 	// lockedTarget is the ball the robot is currently committed to collecting.
 	// It is set when a ball is first selected and cleared only when the phantom
@@ -290,6 +310,8 @@ func main() {
 					phantomActive = false
 					lockedTarget = nil // release lock so next ball is chosen fresh
 					robotLink.Stop()
+					state.DelivSubPhase = DelivSubTurn180 // reset delivery sub-FSM
+					nav = NewNavigator()                   // fresh navigator for delivery
 					state.Phase = PhaseDeliverGoal
 					break
 				}
@@ -362,39 +384,142 @@ func main() {
 				gocv.Line(&img, start, end, cyanColor, 1)
 			}
 
+		// ==========================================
+		// GOAL DELIVERY — 5-STEP SUB-FSM
+		// Steps: TURN180 → BACK_UP → OPEN_LATCH → WAIT_LATCH → CLOSE_LATCH
+		// ==========================================
 		case PhaseDeliverGoal:
-			if !goal.Detected {
+			if !robot.Detected {
 				robotLink.Stop()
-				gocv.PutText(&img, "WAITING FOR GOAL MARKER", image.Pt(20, 100),
-					gocv.FontHersheySimplex, 0.7, magentaColor, 1)
+				gocv.PutText(&img, "DELIVER: robot not found", image.Pt(20, 100),
+					gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 				break
 			}
 
-			var navErr error
-			cmd, navErr = nav.NextCommandToPoint(robot, goal.Center)
-			if navErr != nil {
-				robotLink.Stop()
-				break
-			}
+			switch state.DelivSubPhase {
 
-			if cmd.Arrived {
+			// ── Step 1: Spin 180° so the robot's back faces the goal ─────────────
+			case DelivSubTurn180:
+				if !goal.Detected {
+					robotLink.Stop()
+					gocv.PutText(&img, "DELIVER TURN180: waiting for goal marker",
+						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+					break
+				}
+
+				// Bearing from robot to goal, then +180° = direction the robot's
+				// FRONT needs to point so its BACK faces the goal.
+				dx := float64(goal.Center.X - robot.Center.X)
+				dy := float64(goal.Center.Y - robot.Center.Y)
+				bearingToGoal := math.Atan2(dy, dx) * 180.0 / math.Pi
+				if bearingToGoal < 0 {
+					bearingToGoal += 360
+				}
+				targetHeading := math.Mod(bearingToGoal+180, 360)
+				headingErr := normaliseAngle(targetHeading - robot.Angle)
+				absErr := math.Abs(headingErr)
+
+				gocv.PutText(&img,
+					fmt.Sprintf("DELIVER: TURN180 err=%.0f°", headingErr),
+					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+
+				fmt.Printf("[DELIVER] TURN180 | robotAngle=%.1f° targetHeading=%.1f° err=%.2f°\n",
+					robot.Angle, targetHeading, headingErr)
+
+				if absErr <= deliverTurn180Tol {
+					fmt.Println("[DELIVER] TURN180 complete — switching to BACK_UP")
+					robotLink.Stop()
+					state.DelivSubPhase = DelivSubBackUp
+					break
+				}
+
+				// Proportional turn in place, max 0.4.
+				turnSign := math.Copysign(1, headingErr)
+				turnMag := math.Min(absErr/15.0, 1.0) * 0.4
+				robotLink.Send(DriveCommand{Throttle: 0, Turn: turnSign * turnMag})
+
+			// ── Step 2: Reverse straight into the goal ───────────────────────────
+			case DelivSubBackUp:
+				if !goal.Detected {
+					// Keep reversing on last known heading; don't panic.
+					robotLink.ForceReverse(deliverBackupSpeed)
+					gocv.PutText(&img, "DELIVER BACK_UP: goal marker lost — continuing",
+						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+					break
+				}
+
+				dx := float64(goal.Center.X - robot.Center.X)
+				dy := float64(goal.Center.Y - robot.Center.Y)
+				dist := math.Sqrt(dx*dx + dy*dy)
+
+				gocv.PutText(&img,
+					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx", dist),
+					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+				gocv.Line(&img, robot.Center, goal.Center, magentaColor, 1)
+
+				fmt.Printf("[DELIVER] BACK_UP | dist=%.1fpx goal=(%d,%d) robot=(%d,%d)\n",
+					dist, goal.Center.X, goal.Center.Y, robot.Center.X, robot.Center.Y)
+
+				if dist <= deliverGoalArrivalPx {
+					fmt.Println("[DELIVER] BACK_UP complete — robot in goal, opening latch")
+					robotLink.Stop()
+					state.DelivSubPhase = DelivSubOpenLatch
+					break
+				}
+
+				// Gentle steering correction so we back up straight toward the goal.
+				// When reversing, the "back" of the robot faces the goal, so the
+				// back-facing direction is (robot.Angle + 180).
+				bearingToGoal := math.Atan2(dy, dx) * 180.0 / math.Pi
+				if bearingToGoal < 0 {
+					bearingToGoal += 360
+				}
+				backFacing := math.Mod(robot.Angle+180, 360)
+				steerErr := normaliseAngle(bearingToGoal - backFacing)
+				steerCorr := math.Max(-0.25, math.Min(0.25, steerErr*0.015))
+
+				robotLink.Send(DriveCommand{Throttle: -deliverBackupSpeed, Turn: steerCorr})
+
+			// ── Step 3: Send LATCH_OPEN to EV3, start 8-second timer ─────────────
+			case DelivSubOpenLatch:
+				fmt.Println("[DELIVER] Sending LATCH_OPEN to EV3")
+				robotLink.SendLatchOpen()
+				deliverTimer = now.Add(deliverLatchOpenDuration)
+				state.DelivSubPhase = DelivSubWaitLatch
+
+			// ── Step 4: Hold still for 8 seconds while balls roll out ─────────────
+			case DelivSubWaitLatch:
+				remaining := time.Until(deliverTimer)
+				gocv.PutText(&img,
+					fmt.Sprintf("DELIVER: LATCH OPEN %.1fs", remaining.Seconds()),
+					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+
+				if now.After(deliverTimer) {
+					fmt.Println("[DELIVER] Latch timer expired — closing latch")
+					state.DelivSubPhase = DelivSubCloseLatch
+				}
+				// Robot stays stationary; no drive command sent.
+
+			// ── Step 5: Close latch, mark delivery complete, return to pick ───────
+			case DelivSubCloseLatch:
+				fmt.Println("[DELIVER] Sending LATCH_CLOSE to EV3")
+				robotLink.SendLatchClose()
+
 				state.BallsCollected++
 				if state.CarryingOrange {
 					state.OrangeDelivered = true
 					state.CarryingOrange = false
 				}
-				fmt.Printf("[FSM] Delivered. Total: %d/%d\n", state.BallsCollected, state.TotalBalls)
+				fmt.Printf("[DELIVER] Delivered. Total: %d/%d\n", state.BallsCollected, state.TotalBalls)
 
+				state.DelivSubPhase = DelivSubTurn180 // reset for next delivery
 				if state.BallsCollected >= state.TotalBalls {
 					state.Phase = PhaseDone
 					fmt.Println("[FSM] All balls delivered! Stopping.")
 				} else {
 					state.Phase = PhasePickBall
+					nav = NewNavigator() // fresh nav for next ball collection
 				}
-			} else {
-				robotLink.Send(cmd)
-				start, end := ArrowPoints(robot.Center, goal.Center, 60)
-				gocv.Line(&img, start, end, magentaColor, 1)
 			}
 
 		case PhaseDone:

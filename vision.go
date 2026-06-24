@@ -23,6 +23,22 @@ const (
 	PhaseDone
 )
 
+// DeliverySubPhase tracks the step within PhaseDeliverGoal.
+type DeliverySubPhase int
+
+const (
+	// DelivSubTurn180: spin in place until the robot's back faces the goal.
+	DelivSubTurn180 DeliverySubPhase = iota
+	// DelivSubBackUp: drive in reverse toward the goal.
+	DelivSubBackUp
+	// DelivSubOpenLatch: send LATCH_OPEN to the EV3 and start the wait timer.
+	DelivSubOpenLatch
+	// DelivSubWaitLatch: hold still while the latch is open (8 seconds).
+	DelivSubWaitLatch
+	// DelivSubCloseLatch: send LATCH_CLOSE to the EV3 to retract the back motor.
+	DelivSubCloseLatch
+)
+
 // CollectionState is the mutable FSM state threaded through the main loop.
 type CollectionState struct {
 	Phase Phase
@@ -34,6 +50,8 @@ type CollectionState struct {
 	OrangeDelivered bool
 	// CarryingOrange is true while the robot is ferrying the orange ball to the goal.
 	CarryingOrange bool
+	// DelivSubPhase tracks which step of the goal-delivery sequence we are in.
+	DelivSubPhase DeliverySubPhase
 }
 
 // NewCollectionState returns a fresh FSM ready for an 11-ball run.

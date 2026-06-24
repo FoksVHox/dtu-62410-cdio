@@ -15,6 +15,8 @@ import (
 //
 //	"<throttle> <turn>\n"     e.g. "0.50 -0.20\n"
 //	"STOP\n"                  to halt the belts
+//	"LATCH_OPEN\n"            to fire the back motor (open latch)
+//	"LATCH_CLOSE\n"           to stop the back motor (close latch)
 //
 // The EV3 side listens on the same port and maps throttle/turn onto the belt
 // drive. If no address is configured (or the connection drops), RobotLink
@@ -172,6 +174,72 @@ func (rl *RobotLink) ForceThrottle(throttle float64) {
 	}
 
 	if _, err := rl.conn.Write([]byte(line)); err != nil {
+		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
+		rl.reconnectAsync()
+	}
+}
+
+// ForceReverse bypasses the smoothing ramp and immediately drives the robot
+// straight backwards at the given speed (0..1 maps to reverse throttle).
+// turn=0 is always sent so the robot backs up in a straight line.
+func (rl *RobotLink) ForceReverse(speed float64) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	if now.Sub(rl.lastSend) < rl.minPause {
+		fmt.Printf("[RobotLink] REVERSE SKIP (rate-limited) spd=%.3f\n", speed)
+		return
+	}
+	rl.lastSend = now
+
+	// Negative throttle = reverse; bypass approach() for immediate response.
+	rl.curThr = clamp(-math.Abs(speed), -1, 1)
+	rl.curTurn = 0
+
+	line := fmt.Sprintf("%.3f 0.000\n", rl.curThr)
+
+	fmt.Printf("[RobotLink:REVERSE] t=%s | FORCE thr=%.3f turn=0.000\n",
+		now.Format("15:04:05.000"), rl.curThr)
+
+	if !rl.enabled || rl.conn == nil {
+		fmt.Printf("[RobotLink:SIM] %s", line)
+		return
+	}
+
+	if _, err := rl.conn.Write([]byte(line)); err != nil {
+		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
+		rl.reconnectAsync()
+	}
+}
+
+// SendLatchOpen sends the LATCH_OPEN command to the EV3, which fires the
+// back motor to open the ball-release latch.
+func (rl *RobotLink) SendLatchOpen() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	fmt.Println("[RobotLink] LATCH_OPEN sent")
+	if !rl.enabled || rl.conn == nil {
+		fmt.Println("[RobotLink:SIM] LATCH_OPEN")
+		return
+	}
+	if _, err := rl.conn.Write([]byte("LATCH_OPEN\n")); err != nil {
+		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
+		rl.reconnectAsync()
+	}
+}
+
+// SendLatchClose sends the LATCH_CLOSE command to the EV3, which stops the
+// back motor and retracts the latch.
+func (rl *RobotLink) SendLatchClose() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	fmt.Println("[RobotLink] LATCH_CLOSE sent")
+	if !rl.enabled || rl.conn == nil {
+		fmt.Println("[RobotLink:SIM] LATCH_CLOSE")
+		return
+	}
+	if _, err := rl.conn.Write([]byte("LATCH_CLOSE\n")); err != nil {
 		fmt.Printf("[RobotLink] write failed: %v (reconnecting)\n", err)
 		rl.reconnectAsync()
 	}
