@@ -25,15 +25,9 @@ const (
 type DeliverySubPhase int
 
 const (
-	// DelivSubApproach: drive forward to the staging point directly in front of
-	// the goal marker (offset along the face normal) so the robot is correctly
-	// positioned before it spins and reverses in.
-	DelivSubApproach DeliverySubPhase = iota
-	// DelivSubTurn180: spin in place until the robot's back faces the goal marker
-	// face normal (perpendicular alignment).
-	DelivSubTurn180
-	// DelivSubBackUp: drive in reverse along the face normal toward the goal,
-	// stopping short of the marker.
+	// DelivSubTurn180: spin in place until the robot's back faces the goal.
+	DelivSubTurn180 DeliverySubPhase = iota
+	// DelivSubBackUp: drive in reverse toward the goal.
 	DelivSubBackUp
 	// DelivSubOpenLatch: send LATCH_OPEN to the EV3 and start the wait timer.
 	DelivSubOpenLatch
