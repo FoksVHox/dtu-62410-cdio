@@ -46,9 +46,17 @@ const deliverTurn180Tol = 8.0
 // the goal (positive value; sign is applied inside ForceReverse).
 const deliverBackupSpeed = 0.40
 
-// deliverGoalArrivalPx is the pixel distance from the goal centre at which we
-// consider the robot close enough to open the latch.
-const deliverGoalArrivalPx = 70.0
+// deliverGoalLatchPx is the pixel distance from the goal-marker centre at which
+// the robot stops reversing and opens the latch.  Because the ArUco marker is
+// placed OUTSIDE the course boundary the robot must release the balls while it
+// is still inside the course — i.e. before it physically reaches the marker.
+// Increase this value if the robot crosses the boundary; decrease it if the
+// balls don't reach the goal opening.
+const deliverGoalLatchPx = 160.0
+
+// deliverGoalStopPx is a hard inner limit: even if the latch has not fired yet,
+// stop reversing at this distance so the robot never crosses the boundary.
+const deliverGoalStopPx = 100.0
 
 // deliverLatchOpenDuration is how long the latch stays open (motor forward)
 // before the close command is sent.
@@ -461,12 +469,14 @@ func main() {
 				turnMag := math.Min(absErr/15.0, 1.0) * 0.4
 				robotLink.Send(DriveCommand{Throttle: 0, Turn: turnSign * turnMag})
 
-			// ── Step 2: Reverse straight into the goal ───────────────────────────
+			// ── Step 2: Reverse toward goal; open latch before crossing boundary ─
 			case DelivSubBackUp:
 				if !goal.Detected {
-					robotLink.ForceReverse(deliverBackupSpeed)
-					gocv.PutText(&img, "DELIVER BACK_UP: goal marker lost — continuing",
-						image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
+					// Marker gone (robot has reversed past it / out of camera view).
+					// Stop immediately — we are close enough to open the latch.
+					fmt.Println("[DELIVER] BACK_UP: goal marker lost — stopping and opening latch")
+					robotLink.Stop()
+					state.DelivSubPhase = DelivSubOpenLatch
 					break
 				}
 
@@ -475,14 +485,23 @@ func main() {
 				dist := math.Sqrt(dx*dx + dy*dy)
 
 				gocv.PutText(&img,
-					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx", dist),
+					fmt.Sprintf("DELIVER: BACK_UP dist=%.0fpx (latch@%.0f)", dist, deliverGoalLatchPx),
 					image.Pt(20, 100), gocv.FontHersheySimplex, 0.6, magentaColor, 2)
 				gocv.Line(&img, robot.Center, goal.Center, magentaColor, 1)
 				fmt.Printf("[DELIVER] BACK_UP | dist=%.1fpx goal=(%d,%d) robot=(%d,%d)\n",
 					dist, goal.Center.X, goal.Center.Y, robot.Center.X, robot.Center.Y)
 
-				if dist <= deliverGoalArrivalPx {
-					fmt.Println("[DELIVER] BACK_UP complete — robot in goal, opening latch")
+				// Primary trigger: open latch at deliverGoalLatchPx (before boundary).
+				// Safety net: also stop at deliverGoalStopPx so robot never crosses.
+				if dist <= deliverGoalLatchPx {
+					fmt.Printf("[DELIVER] BACK_UP: dist %.1fpx ≤ latch threshold %.0fpx — stopping and opening latch\n",
+						dist, deliverGoalLatchPx)
+					robotLink.Stop()
+					state.DelivSubPhase = DelivSubOpenLatch
+					break
+				}
+				if dist <= deliverGoalStopPx {
+					fmt.Printf("[DELIVER] BACK_UP: hard stop at %.1fpx (boundary guard)\n", dist)
 					robotLink.Stop()
 					state.DelivSubPhase = DelivSubOpenLatch
 					break
