@@ -28,6 +28,14 @@ const phantomDuration = 50 * time.Millisecond
 // Set slightly higher than DriveSpeed so the robot pushes fully into the harvester.
 const phantomThrottle = 0.55
 
+// minCircularity is the minimum circularity score (4π·area/perimeter²) a
+// contour must achieve to be considered a ball candidate.  A perfect circle
+// scores 1.0; real golf balls typically score ≥ 0.70.  Irregular light
+// reflections and hot-spots score lower and are rejected by this filter.
+// Decrease toward 0.60 if real balls are missed; increase toward 0.80 to
+// reject more ghost blobs.
+const minCircularity = 0.70
+
 // ── Goal-delivery tuning ──────────────────────────────────────────────────────
 
 // deliverTurn180Tol is the heading error (degrees) at which the 180° turn is
@@ -185,6 +193,23 @@ func main() {
 				aspectRatio := float32(rect.Dx()) / float32(rect.Dy())
 
 				if aspectRatio > 0.7 && aspectRatio < 1.5 {
+
+					// ── Round-shape filter ────────────────────────────────────
+					// Circularity = 4π·area / perimeter².  A perfect circle
+					// scores 1.0; real golf balls ≥ ~0.70.  Light reflections
+					// and hot-spots are typically elongated or jagged and score
+					// lower, so they are rejected here before the sightings
+					// tracker ever considers them.
+					perimeter := gocv.ArcLength(contour, true)
+					if perimeter <= 0 {
+						continue
+					}
+					circularity := 4.0 * math.Pi * float64(area) / (perimeter * perimeter)
+					if circularity < minCircularity {
+						continue
+					}
+					// ─────────────────────────────────────────────────────────
+
 					centerX := rect.Min.X + (rect.Dx() / 2)
 					centerY := rect.Min.Y + (rect.Dy() / 2)
 					ballCenter := image.Pt(centerX, centerY)
