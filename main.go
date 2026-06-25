@@ -52,7 +52,7 @@ const deliverBackupSpeed = 0.40
 // is still inside the course — i.e. before it physically reaches the marker.
 // Increase this value if the robot crosses the boundary; decrease it if the
 // balls don't reach the goal opening.
-const deliverGoalLatchPx = 160.0
+const deliverGoalLatchPx = 120.0
 
 // deliverGoalStopPx is a hard inner limit: even if the latch has not fired yet,
 // stop reversing at this distance so the robot never crosses the boundary.
